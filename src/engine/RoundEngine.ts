@@ -62,4 +62,40 @@ export class RoundEngine {
       this.state.currentRound += 1;
     }
   }
+
+  /**
+   * 현재 phase 하나만 실행하고 멈춘다. UI가 사람의 입력을 기다렸다가 phase를 한 단계씩
+   * 진행시켜야 하는 Milestone 2(Local Classroom Prototype)를 위한 것이다 — runRound()/
+   * runGame()은 헤드리스 시뮬레이터가 계속 쓰는 완전 동기 실행 경로이므로 건드리지 않는다.
+   *
+   * ROUND_PHASES.length * config.totalRounds번 반복 호출하면 runGame() 한 번과 정확히
+   * 같은 최종 상태가 되어야 한다 (tests/engine/roundEngine.test.ts가 이를 검증한다).
+   */
+  async stepPhase(): Promise<{ round: number; phase: RoundPhase; gameOver: boolean }> {
+    if (this.state.currentRound > this.state.config.totalRounds) {
+      throw new Error("stepPhase() called after the game has already ended");
+    }
+
+    const executedRound = this.state.currentRound;
+    const executedPhase = this.state.currentPhase;
+    const handler = this.handlers[executedPhase];
+    if (handler) {
+      await handler(this.state);
+    }
+
+    const index = ROUND_PHASES.indexOf(executedPhase);
+    const isLastPhaseOfRound = index === ROUND_PHASES.length - 1;
+    if (isLastPhaseOfRound) {
+      this.state.currentRound += 1;
+      if (this.state.currentRound <= this.state.config.totalRounds) {
+        this.state.currentPhase = ROUND_PHASES[0]!;
+      }
+      // 게임이 끝났다면 currentPhase는 마지막으로 실행된 phase("round-result")에 머문다 —
+      // runGame()의 최종 상태(currentRound === totalRounds+1)와 동일하게 맞추기 위함.
+    } else {
+      this.state.currentPhase = ROUND_PHASES[index + 1]!;
+    }
+
+    return { round: executedRound, phase: executedPhase, gameOver: this.state.currentRound > this.state.config.totalRounds };
+  }
 }

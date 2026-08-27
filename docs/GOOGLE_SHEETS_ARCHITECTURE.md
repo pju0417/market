@@ -27,9 +27,11 @@
 
 ```
 src/storage/
-  StorageAdapter.ts        # 인터페이스 정의 (이번 단계에서 정의)
-  MemoryStorageAdapter.ts  # 인메모리 구현 (이번 단계에서 최소 구현, 테스트/시뮬레이션용)
-  LocalStorageAdapter.ts   # 브라우저 로컬 저장 (Milestone 2에서 구현)
+  StorageAdapter.ts        # 인터페이스 정의 (Milestone 0)
+  MemoryStorageAdapter.ts  # 인메모리 구현 (Milestone 0, 테스트/시뮬레이션용)
+  LocalStorageAdapter.ts   # 브라우저 로컬 저장 (Milestone 2). GameSession.enableAutoSave()로
+                           # 연결되어 phase마다 자동 저장하고, 새로고침 시 ResumePromptScreen이
+                           # 이어하기를 제안한다.
   GoogleSheetsAdapter.ts   # Apps Script 연동 (Milestone 5에서 구현)
 ```
 

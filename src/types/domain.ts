@@ -130,6 +130,38 @@ export interface RoundMetrics {
   totalRetailVolume: number;
   totalRetailValue: number;
   averageHouseholdSatisfaction: number;
+  /** 이 라운드에 기업이 생산한 수량 (팔렸는지 여부와 무관, docs/ADVISOR_RULES.md가 재고율 계산에 사용). */
+  companyUnitsProduced: Record<ParticipantId, number>;
+  /** 이 라운드에 도매시장에서 실제로 팔린 수량 (companyUnitsProduced와의 차이가 재고 누적분). */
+  companyUnitsSoldWholesale: Record<ParticipantId, number>;
+  /** 이 라운드 도매 판매로 얻은 총 매출(유통비 차감 전, 가게가 지불한 금액 기준). */
+  companyRevenue: Record<ParticipantId, number>;
+  /** 이 라운드에 가게가 도매시장에서 매입한 수량. */
+  storeUnitsPurchased: Record<ParticipantId, number>;
+  /** 이 라운드에 가게가 도매 매입에 지출한 총액. */
+  storeWholesaleSpend: Record<ParticipantId, number>;
+  /** 이 라운드에 소매시장에서 실제로 팔린 수량. */
+  storeUnitsSoldRetail: Record<ParticipantId, number>;
+  /** 이 라운드 소매 판매로 얻은 총 매출(유통비 차감 전, 가계가 지불한 금액 기준). */
+  storeRevenue: Record<ParticipantId, number>;
+  /** 이 라운드에 가게가 매입한 서로 다른 기업(공급처)의 수 (매입이 없었으면 0). */
+  storeSupplierCount: Record<ParticipantId, number>;
+  /** 이 라운드 매입 지출 중 최대 단일 공급처가 차지하는 비중 (0~1, 매입이 없었으면 0). */
+  storeTopSupplierSpendShare: Record<ParticipantId, number>;
+  /** 이 라운드 가계가 소비시장에서 지출한 총액. */
+  householdSpend: Record<ParticipantId, number>;
+  /** 이 라운드 가계가 구매한 총 수량. */
+  householdUnitsBought: Record<ParticipantId, number>;
+  /** 이 라운드 가계가 구매한 서로 다른 카테고리 수 (소비 다양성, 구매가 없었으면 0). */
+  householdCategoryCount: Record<ParticipantId, number>;
+  /** 이 라운드 지출 중 최대 단일 카테고리가 차지하는 비중 (0~1, 구매가 없었으면 0). */
+  householdTopCategorySpendShare: Record<ParticipantId, number>;
+  /**
+   * 이 라운드 "필수 소비" 카테고리(현재 food/apparel) 중 시장에 매물이 있었는데도 하나도 사지
+   * 못한 카테고리 id 목록 (매물 자체가 없었던 카테고리는 제외 — 면제). 비어있으면 필수 소비를
+   * 모두 충족했다는 뜻.
+   */
+  householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
 }
 
 /** 학생 한 명 = company + store + household 삼중 소유 (D-001). */

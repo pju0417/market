@@ -11,14 +11,22 @@ import {
   COSTS,
   DISTRICTS,
   DISTRICT_IDS,
+  ESSENTIAL_CATEGORY_IDS,
+  essentialSatisfactionPenalty,
   PRODUCT_CATEGORIES,
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
+import {
+  resolveCompanyDecision,
+  resolveHouseholdPurchases,
+  resolveStorePurchases,
+  type CompanyDecisionInput,
+  type PurchaseRequestLine,
+} from "../economy/humanDecisions.js";
 import { planNpcBackfill } from "../npc/backfill.js";
-import { decideCompanyProduction, decideHouseholdPurchases, decideStorePurchases } from "../npc/decisions.js";
 import type {
   CompanyState,
   GameState,
@@ -168,6 +176,19 @@ interface RoundAccumulator {
   wholesaleValue: number;
   retailVolume: number;
   retailValue: number;
+  /** advisor(전략 비서)용 계측치. 시장 지표 계산 자체에는 쓰이지 않는다 (docs/DECISIONS.md 참고: 새 필드 추가만, 기존 계산 순서는 불변). */
+  companyUnitsProduced: Record<ParticipantId, number>;
+  companyUnitsSoldWholesale: Record<ParticipantId, number>;
+  storeUnitsPurchased: Record<ParticipantId, number>;
+  storeWholesaleSpend: Record<ParticipantId, number>;
+  storeUnitsSoldRetail: Record<ParticipantId, number>;
+  /** 가게별 × 공급 기업별 이번 라운드 매입 지출 (storeSupplierCount/storeTopSupplierSpendShare 계산용). */
+  storeSpendByCompany: Record<ParticipantId, Record<ParticipantId, number>>;
+  householdSpend: Record<ParticipantId, number>;
+  householdUnitsBought: Record<ParticipantId, number>;
+  /** 가계별 × 카테고리별 이번 라운드 지출 (householdCategoryCount/householdTopCategorySpendShare 계산용). */
+  householdSpendByCategory: Record<ParticipantId, Partial<Record<ProductCategoryId, number>>>;
+  householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
 }
 
 function freshAccumulator(): RoundAccumulator {
@@ -180,11 +201,44 @@ function freshAccumulator(): RoundAccumulator {
     wholesaleValue: 0,
     retailVolume: 0,
     retailValue: 0,
+    companyUnitsProduced: {},
+    companyUnitsSoldWholesale: {},
+    storeUnitsPurchased: {},
+    storeWholesaleSpend: {},
+    storeUnitsSoldRetail: {},
+    storeSpendByCompany: {},
+    householdSpend: {},
+    householdUnitsBought: {},
+    householdSpendByCategory: {},
+    householdEssentialCategoriesMissed: {},
   };
 }
 
-/** 학생/NPC를 구분하지 않고 모든 참여자를 규칙 기반으로 자동 진행시키는 phase handler 세트. */
-export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
+/**
+ * 사람이 특정 참여자를 대신 조종할 때 쓰는 결정 소스. 함수가 undefined를 반환하면(또는
+ * decisionSource 자체가 없으면) 항상 기존 봇 정책으로 그대로 넘어간다 — 즉, decisionSource를
+ * 주지 않는 `createAutoPlayPhaseHandlers(rng)` 호출은 이 변경 전과 완전히 동일하게 동작한다
+ * (tests/simulation의 결정론 회귀 테스트, scripts/simulate-class.ts 출력 비교로 확인).
+ */
+export interface StoreDecisionInput {
+  purchases: readonly PurchaseRequestLine[];
+  /** 사람이 직접 정한 소매 판매가 (docs/GAME_RULES.md 1절). 생략하면 기존 자동 계산을 쓴다. */
+  retailPrice?: number;
+}
+
+export interface HumanDecisionSource {
+  getCompanyInput(companyId: ParticipantId): CompanyDecisionInput | undefined;
+  getStorePurchaseRequest(storeId: ParticipantId): StoreDecisionInput | undefined;
+  getHouseholdPurchaseRequest(householdId: ParticipantId): readonly PurchaseRequestLine[] | undefined;
+}
+
+/**
+ * 참여자별로 사람 입력이 있으면 그것을, 없으면 규칙 기반 봇 정책을 쓰는 phase handler 세트.
+ * `decisionSource`를 생략하면 전원이 봇으로 자동 진행된다 (Milestone 1 헤드리스 시뮬레이터가
+ * 쓰는 경로, `createAutoPlayPhaseHandlers`가 이 형태로 호출한다). Milestone 2의
+ * `src/multiplayer/GameSession`은 `decisionSource`를 넘겨 특정 참여자만 사람이 조종하게 한다.
+ */
+export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSource): PhaseHandlers {
   let acc = freshAccumulator();
 
   function runCompanyTurn(state: GameState): void {
@@ -194,9 +248,11 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       const district = DISTRICTS[company.districtId];
       applyFixedCosts(company.ledger, COSTS.baseLaborCostCompany, COSTS.baseRentCompany * district.rentMultiplier);
 
-      const decision = decideCompanyProduction(company, company.ledger.cash, rng);
+      const humanInput = decisionSource?.getCompanyInput(company.id);
+      const decision = resolveCompanyDecision(company, company.ledger.cash, humanInput, rng);
       if (decision === null || decision.quantity <= 0) continue;
 
+      acc.companyUnitsProduced[company.id] = (acc.companyUnitsProduced[company.id] ?? 0) + decision.quantity;
       chargeDiscretionary(company.ledger, decision.productionCost);
       company.quality = blendQuality(company.inventoryQuantity, company.quality, decision.quantity, decision.quality);
       company.inventoryQuantity += decision.quantity;
@@ -231,8 +287,8 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       applyFixedCosts(store.ledger, COSTS.baseLaborCostStore, COSTS.baseRentStore * district.rentMultiplier);
 
       const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
-      const decision = decideStorePurchases(store, store.ledger.cash, eligible, rng);
-      if (decision.purchases.length === 0) continue;
+      const requested = decisionSource?.getStorePurchaseRequest(store.id);
+      const decision = resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested?.purchases, rng);
 
       let totalCost = 0;
       let totalQty = 0;
@@ -249,6 +305,9 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
         acc.wholesaleRevenueByCompany[company.id] = (acc.wholesaleRevenueByCompany[company.id] ?? 0) + cost;
         acc.wholesaleVolume += purchase.quantity;
         acc.wholesaleValue += cost;
+        acc.companyUnitsSoldWholesale[company.id] = (acc.companyUnitsSoldWholesale[company.id] ?? 0) + purchase.quantity;
+        const spendByCompany = (acc.storeSpendByCompany[store.id] ??= {});
+        spendByCompany[company.id] = (spendByCompany[company.id] ?? 0) + cost;
 
         store.inventoryQuality = blendQuality(store.inventoryQuantity, store.inventoryQuality, purchase.quantity, listing.quality);
         store.inventoryQuantity += purchase.quantity;
@@ -260,6 +319,18 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       }
 
       if (totalQty > 0) {
+        acc.storeUnitsPurchased[store.id] = (acc.storeUnitsPurchased[store.id] ?? 0) + totalQty;
+        acc.storeWholesaleSpend[store.id] = (acc.storeWholesaleSpend[store.id] ?? 0) + totalCost;
+      }
+
+      // 사람이 직접 판매가격을 정했다면(가게의 핵심 결정, docs/GAME_RULES.md 1절) 그 값을
+      // 그대로 쓴다 — 이번 라운드 매입이 없었어도(기존 재고 재가격 책정) 적용된다. 값을
+      // 주지 않았으면(봇은 항상 여기 해당) 기존 자동 계산(매입원가×전략 마크업)을 쓴다 —
+      // 헤드리스 시뮬레이터 회귀 없음.
+      const humanRetailPrice = requested?.retailPrice;
+      if (humanRetailPrice !== undefined) {
+        store.retailPrice = Math.max(0, humanRetailPrice);
+      } else if (totalQty > 0) {
         const preset = STORE_STRATEGY_PRESETS[store.strategyId];
         store.retailPrice = (totalCost / totalQty) * preset.priceMarkup;
       }
@@ -289,10 +360,12 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       credit(household.ledger, household.budgetPerRound);
 
       const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
-      const decision = decideHouseholdPurchases(household, household.ledger.cash, eligible, rng);
+      const requested = decisionSource?.getHouseholdPurchaseRequest(household.id);
+      const decision = resolveHouseholdPurchases(household, household.ledger.cash, eligible, state.stores, requested, rng);
 
       let qualityUnits = 0;
       let unitsBought = 0;
+      const unitsByCategory: Partial<Record<ProductCategoryId, number>> = {};
       for (const purchase of decision.purchases) {
         const listing = state.retailListings.find((l) => l.id === purchase.listingId);
         const store = listing ? state.stores[listing.storeId] : undefined;
@@ -306,15 +379,35 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
         acc.retailRevenueByStore[store.id] = (acc.retailRevenueByStore[store.id] ?? 0) + cost;
         acc.retailVolume += purchase.quantity;
         acc.retailValue += cost;
+        acc.storeUnitsSoldRetail[store.id] = (acc.storeUnitsSoldRetail[store.id] ?? 0) + purchase.quantity;
 
         listing.quantityAvailable -= purchase.quantity;
         store.inventoryQuantity -= purchase.quantity;
         qualityUnits += listing.quality * purchase.quantity;
         unitsBought += purchase.quantity;
+
+        acc.householdSpend[householdId] = (acc.householdSpend[householdId] ?? 0) + cost;
+        unitsByCategory[listing.categoryId] = (unitsByCategory[listing.categoryId] ?? 0) + purchase.quantity;
+        const spendByCategory = (acc.householdSpendByCategory[householdId] ??= {});
+        spendByCategory[listing.categoryId] = (spendByCategory[listing.categoryId] ?? 0) + cost;
       }
 
-      const roundSatisfaction = unitsBought > 0 ? qualityUnits / unitsBought : 0;
+      acc.householdUnitsBought[householdId] = (acc.householdUnitsBought[householdId] ?? 0) + unitsBought;
+
+      const rawSatisfaction = unitsBought > 0 ? qualityUnits / unitsBought : 0;
+      let essentialPenalty = 0;
+      const missedEssentialCategories: ProductCategoryId[] = [];
+      for (const categoryId of ESSENTIAL_CATEGORY_IDS) {
+        const wasAvailable = eligible.some((l) => l.categoryId === categoryId && l.quantityAvailable > 0);
+        const bought = unitsByCategory[categoryId] ?? 0;
+        if (wasAvailable && bought <= 0) {
+          essentialPenalty += essentialSatisfactionPenalty(categoryId);
+          missedEssentialCategories.push(categoryId);
+        }
+      }
+      const roundSatisfaction = Math.max(0, rawSatisfaction - essentialPenalty);
       household.satisfactionScore = household.satisfactionScore * 0.7 + roundSatisfaction * 0.3;
+      acc.householdEssentialCategoriesMissed[householdId] = missedEssentialCategories;
     }
   }
 
@@ -347,6 +440,53 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
         ? householdValues.reduce((sum, h) => sum + h.satisfactionScore, 0) / householdValues.length
         : 0;
 
+    const companyUnitsProduced: Record<ParticipantId, number> = {};
+    const companyUnitsSoldWholesale: Record<ParticipantId, number> = {};
+    const companyRevenue: Record<ParticipantId, number> = {};
+    for (const company of Object.values(state.companies)) {
+      companyUnitsProduced[company.id] = acc.companyUnitsProduced[company.id] ?? 0;
+      companyUnitsSoldWholesale[company.id] = acc.companyUnitsSoldWholesale[company.id] ?? 0;
+      companyRevenue[company.id] = acc.wholesaleRevenueByCompany[company.id] ?? 0;
+    }
+
+    const storeUnitsPurchased: Record<ParticipantId, number> = {};
+    const storeWholesaleSpend: Record<ParticipantId, number> = {};
+    const storeUnitsSoldRetail: Record<ParticipantId, number> = {};
+    const storeRevenue: Record<ParticipantId, number> = {};
+    const storeSupplierCount: Record<ParticipantId, number> = {};
+    const storeTopSupplierSpendShare: Record<ParticipantId, number> = {};
+    for (const store of Object.values(state.stores)) {
+      storeUnitsPurchased[store.id] = acc.storeUnitsPurchased[store.id] ?? 0;
+      storeWholesaleSpend[store.id] = acc.storeWholesaleSpend[store.id] ?? 0;
+      storeUnitsSoldRetail[store.id] = acc.storeUnitsSoldRetail[store.id] ?? 0;
+      storeRevenue[store.id] = acc.retailRevenueByStore[store.id] ?? 0;
+
+      const spendByCompany = acc.storeSpendByCompany[store.id];
+      const spends = spendByCompany !== undefined ? Object.values(spendByCompany) : [];
+      const totalSpend = spends.reduce((sum, spend) => sum + spend, 0);
+      storeSupplierCount[store.id] = spends.length;
+      storeTopSupplierSpendShare[store.id] = totalSpend > 0 ? Math.max(...spends) / totalSpend : 0;
+    }
+
+    const householdSpend: Record<ParticipantId, number> = {};
+    const householdUnitsBought: Record<ParticipantId, number> = {};
+    const householdCategoryCount: Record<ParticipantId, number> = {};
+    const householdTopCategorySpendShare: Record<ParticipantId, number> = {};
+    const householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]> = {};
+    for (const household of Object.values(state.households)) {
+      householdSpend[household.id] = acc.householdSpend[household.id] ?? 0;
+      householdUnitsBought[household.id] = acc.householdUnitsBought[household.id] ?? 0;
+
+      const spendByCategory = acc.householdSpendByCategory[household.id];
+      const categorySpends = spendByCategory !== undefined ? Object.values(spendByCategory) : [];
+      const totalCategorySpend = categorySpends.reduce((sum, spend) => sum + (spend ?? 0), 0);
+      householdCategoryCount[household.id] = spendByCategory !== undefined ? Object.keys(spendByCategory).length : 0;
+      householdTopCategorySpendShare[household.id] =
+        totalCategorySpend > 0 ? Math.max(...categorySpends.map((spend) => spend ?? 0)) / totalCategorySpend : 0;
+
+      householdEssentialCategoriesMissed[household.id] = acc.householdEssentialCategoriesMissed[household.id] ?? [];
+    }
+
     const metrics: RoundMetrics = {
       round: state.currentRound,
       companyProfit,
@@ -358,6 +498,20 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       totalRetailVolume: acc.retailVolume,
       totalRetailValue: acc.retailValue,
       averageHouseholdSatisfaction,
+      companyUnitsProduced,
+      companyUnitsSoldWholesale,
+      companyRevenue,
+      storeUnitsPurchased,
+      storeWholesaleSpend,
+      storeUnitsSoldRetail,
+      storeRevenue,
+      storeSupplierCount,
+      storeTopSupplierSpendShare,
+      householdSpend,
+      householdUnitsBought,
+      householdCategoryCount,
+      householdTopCategorySpendShare,
+      householdEssentialCategoriesMissed,
     };
     state.roundMetrics.push(metrics);
   }
@@ -377,6 +531,15 @@ export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
       ),
     "round-settlement": runRoundSettlement,
   };
+}
+
+/**
+ * 학생/NPC를 구분하지 않고 전원을 규칙 기반으로 자동 진행시키는 phase handler 세트.
+ * `createPhaseHandlers(rng)`를 decisionSource 없이 호출하는 것과 완전히 동일하다 — 기존
+ * 호출부(simulateGame, 이 함수를 직접 쓰던 코드)를 바꾸지 않기 위해 이름을 그대로 유지한다.
+ */
+export function createAutoPlayPhaseHandlers(rng: Rng): PhaseHandlers {
+  return createPhaseHandlers(rng);
 }
 
 export interface SimulationResult {

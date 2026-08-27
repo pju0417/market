@@ -26,28 +26,28 @@ export interface BackfillPlan {
   npcConsumers: NpcConsumerSlot[];
 }
 
-function fillCategoryCoverage(
+/**
+ * 카테고리별로 최소 참여자 수(minPerCategory)를 채운다 (D-023) — "전체 최소치"가 아니라
+ * 카테고리 단위 하한이라, 학생이 어느 업종에 쏠려 있든 각 카테고리마다 최소한의 경쟁자가
+ * 생긴다. 예: minPerCategory=2, 학생이 food에만 1명 있으면 food에 NPC 1개, 나머지 3개
+ * 카테고리에는 NPC 2개씩 배치된다.
+ */
+function fillCategoryMinimums(
   existingCategoryCounts: Record<ProductCategoryId, number>,
-  baselineCount: number,
+  minPerCategory: number,
   rng: Rng,
 ): NpcBusinessSlot[] {
   const slots: NpcBusinessSlot[] = [];
-  const counts = { ...existingCategoryCounts };
+  let districtCursor = 0;
 
-  for (let i = 0; i < baselineCount; i += 1) {
-    const categoryId = PRODUCT_CATEGORIES[i % PRODUCT_CATEGORIES.length]!;
-    const districtId = DISTRICT_IDS[i % DISTRICT_IDS.length]!;
-    slots.push({ categoryId, districtId, strategyId: rngPick(rng, ALL_STRATEGIES) });
-    counts[categoryId] = (counts[categoryId] ?? 0) + 1;
-  }
-
-  let districtCursor = baselineCount;
   for (const categoryId of PRODUCT_CATEGORIES) {
-    if ((counts[categoryId] ?? 0) > 0) continue;
-    const districtId = DISTRICT_IDS[districtCursor % DISTRICT_IDS.length]!;
-    slots.push({ categoryId, districtId, strategyId: rngPick(rng, ALL_STRATEGIES) });
-    counts[categoryId] = 1;
-    districtCursor += 1;
+    const existing = existingCategoryCounts[categoryId] ?? 0;
+    const needed = Math.max(0, minPerCategory - existing);
+    for (let i = 0; i < needed; i += 1) {
+      const districtId = DISTRICT_IDS[districtCursor % DISTRICT_IDS.length]!;
+      slots.push({ categoryId, districtId, strategyId: rngPick(rng, ALL_STRATEGIES) });
+      districtCursor += 1;
+    }
   }
 
   return slots;
@@ -71,20 +71,25 @@ export function planNpcBackfill(
   studentStoreCategories: readonly ProductCategoryId[],
   rng: Rng,
 ): BackfillPlan {
-  const npcCompanies = fillCategoryCoverage(
+  const npcCompanies = fillCategoryMinimums(
     countByCategory(studentCompanyCategories),
-    Math.max(0, NPC_TARGETS.minCompanies - studentCount),
+    NPC_TARGETS.minCompaniesPerCategory,
     rng,
   );
-  const npcStores = fillCategoryCoverage(
+  const npcStores = fillCategoryMinimums(
     countByCategory(studentStoreCategories),
-    Math.max(0, NPC_TARGETS.minStores - studentCount),
+    NPC_TARGETS.minStoresPerCategory,
     rng,
   );
 
+  // 소비자(수요) 목표는 학생 수가 아니라 실제 가게 수(공급)에 연동한다 — D-023 후속:
+  // 카테고리별 최소치로 가게를 늘렸는데 소비자 수는 그대로면 판매자만 늘어 평균 손익이
+  // 더 나빠진다. 모든 참여자는 기업+가게+가계를 함께 한다는 원칙(D-001)을 NPC에도
+  // 반영해, 가게가 늘어난 만큼 소비자도 함께 늘린다.
+  const totalStores = studentStoreCategories.length + npcStores.length;
   const targetTotalConsumers = Math.max(
     NPC_TARGETS.minConsumers,
-    Math.ceil(studentCount * (1 + NPC_TARGETS.consumersPerStudent)),
+    Math.ceil(totalStores * NPC_TARGETS.consumersPerStore),
   );
   const npcConsumerCount = Math.max(0, targetTotalConsumers - studentCount);
   const npcConsumers: NpcConsumerSlot[] = Array.from({ length: npcConsumerCount }, () => ({

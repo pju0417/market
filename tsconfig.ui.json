@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -12,22 +13,18 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": false,
-    "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": ".",
+    "noEmit": true,
+    "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
       "@engine/*": ["src/engine/*"],
       "@economy/*": ["src/economy/*"],
       "@npc/*": ["src/npc/*"],
-      "@advisor/*": ["src/advisor/*"],
       "@multiplayer/*": ["src/multiplayer/*"],
       "@storage/*": ["src/storage/*"],
       "@types/*": ["src/types/*"],
       "@ui/*": ["src/ui/*"]
     }
   },
-  "include": ["src", "tests", "scripts"],
-  "exclude": ["node_modules", "dist", "src/ui"]
+  "include": ["src/ui", "vite.config.ts"]
 }

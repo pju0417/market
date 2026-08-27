@@ -4,6 +4,7 @@ import {
   decideCompanyProduction,
   decideHouseholdPurchases,
   decideStorePurchases,
+  scoreListingForBuyer,
 } from "../../src/npc/decisions.js";
 import type { CompanyState, HouseholdState, RetailListing, StoreState, WholesaleListing } from "../../src/types/domain.js";
 
@@ -147,5 +148,62 @@ describe("decideHouseholdPurchases", () => {
     const decision = decideHouseholdPurchases(household, 100, [], rng);
 
     expect(decision.purchases).toHaveLength(0);
+  });
+
+  it("prioritizes food over apparel/electronics/toys when normalized price and quality are identical (D-024 priority bonus)", () => {
+    const household = makeHousehold();
+    // Each category has a different CATEGORY_UNIT_COST reference price, so prices are scaled
+    // per-category (unitCost * 2.2) to make the underlying price/quality score identical before
+    // the essential-category priority bonus is applied — isolating the effect being tested.
+    const listings: RetailListing[] = [
+      { id: "r-food", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 4 * 2.2 },
+      { id: "r-apparel", storeId: "store-a", categoryId: "apparel", quantityAvailable: 10, quality: 0.5, price: 6 * 2.2 },
+      { id: "r-electronics", storeId: "store-a", categoryId: "electronics", quantityAvailable: 10, quality: 0.5, price: 12 * 2.2 },
+      { id: "r-toys", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 8 * 2.2 },
+    ];
+    const rng = createRng(1);
+
+    // Ample cash: candidates are bought in descending score order, so the first purchase
+    // reveals the top-ranked listing directly.
+    const decision = decideHouseholdPurchases(household, 1000, listings, rng);
+
+    expect(decision.purchases.length).toBeGreaterThan(0);
+    expect(decision.purchases[0]!.listingId).toBe("r-food");
+  });
+
+  it("does not let the priority bonus override an extreme price disadvantage", () => {
+    const household = makeHousehold();
+    const listings: RetailListing[] = [
+      { id: "r-food-expensive", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 1000 },
+      { id: "r-toys-cheap", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
+    ];
+    const rng = createRng(1);
+
+    const decision = decideHouseholdPurchases(household, 15, listings, rng);
+
+    expect(decision.purchases.some((p) => p.listingId === "r-food-expensive")).toBe(false);
+    expect(decision.purchases.some((p) => p.listingId === "r-toys-cheap")).toBe(true);
+  });
+});
+
+describe("scoreListingForBuyer (exported for direct unit testing, D-024)", () => {
+  it("adds exactly priorityBonus to the score, all else being equal", () => {
+    const rng1 = createRng(5);
+    const rng2 = createRng(5);
+
+    const withoutBonus = scoreListingForBuyer(10, 0.5, "food", 0.5, rng1);
+    const withBonus = scoreListingForBuyer(10, 0.5, "food", 0.5, rng2, 0.15);
+
+    expect(withBonus - withoutBonus).toBeCloseTo(0.15, 10);
+  });
+
+  it("defaults priorityBonus to 0 when omitted", () => {
+    const rng1 = createRng(9);
+    const rng2 = createRng(9);
+
+    const implicit = scoreListingForBuyer(10, 0.5, "food", 0.5, rng1);
+    const explicitZero = scoreListingForBuyer(10, 0.5, "food", 0.5, rng2, 0);
+
+    expect(implicit).toBe(explicitZero);
   });
 });

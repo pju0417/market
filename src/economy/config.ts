@@ -84,6 +84,15 @@ export const DISTRICTS: Record<DistrictId, DistrictProfile> = {
 
 export const DISTRICT_IDS: readonly DistrictId[] = Object.keys(DISTRICTS) as DistrictId[];
 
+/**
+ * 기업의 실효 생산단가. src/npc/decisions.ts(봇)와 src/economy/humanDecisions.ts(사람)가
+ * 똑같이 이 함수를 쓴다 — UI도 미리보기를 보여줄 때 이 함수를 그대로 불러써야 하며,
+ * 공식을 다시 베껴 쓰지 않는다.
+ */
+export function companyUnitCost(categoryId: ProductCategoryId, districtId: DistrictId): number {
+  return CATEGORY_UNIT_COST[categoryId] / DISTRICTS[districtId].companySuitability;
+}
+
 /** 기본 비용 상수 (docs/GAME_RULES.md 3절 — 1라운드부터 적용, D-009). */
 export const COSTS = {
   initialCashCompany: 800,
@@ -159,13 +168,63 @@ export const ALL_STRATEGIES: readonly StrategyId[] = [
 ];
 
 /**
- * NPC 보충 목표치 (docs/NPC_DESIGN.md, docs/DECISIONS.md D-008). 학생 수 대비 최소
- * 시장 참여자 수를 보장한다. 실제 배치는 src/npc/backfill.ts가 카테고리 쏠림도 고려한다.
+ * NPC 보충 목표치 (docs/NPC_DESIGN.md, docs/DECISIONS.md D-008, D-023). 카테고리별로
+ * 최소 참여자 수(학생 포함)를 보장한다 — 예전에는 "전체 최소치"(예: 4)가 카테고리 수(4)와
+ * 우연히 같아서 studentCount가 작을 때 카테고리당 참여자가 1명(독점)까지 줄어드는 문제가
+ * 있었다 (D-023). 카테고리 단위로 하한을 두면 학급 규모와 무관하게 각 업종에 최소한의
+ * 경쟁이 있다는 것을 구조적으로 보장한다. 실제 배치는 src/npc/backfill.ts가 담당한다.
  */
+/**
+ * "필수 소비" 카테고리별 만족도 페널티 (docs/DECISIONS.md D-024). 이 카테고리 매물이 시장에
+ * 실제로 있었는데도 이번 라운드 하나도 사지 못했을 때 roundSatisfaction(0~1)에서 차감한다.
+ * 식품이 의류보다 더 중요하다는 요구사항을 값 차등(2:1)으로 표현한다. v1 잠정값 — 근거는
+ * 가계 만족도 정상상태(0.48~0.54)가 최악의 경우(둘 다 계속 놓침)에도 0.18~0.24로 남고,
+ * 하나만 놓쳤을 때와 뚜렷이 구분되도록 계산해 정했다. 조정 시 CLAUDE.md 4절 승인 절차 적용.
+ */
+export const ESSENTIAL_CATEGORY_SATISFACTION_PENALTY: Partial<Record<ProductCategoryId, number>> = {
+  food: 0.2,
+  apparel: 0.1,
+};
+
+/**
+ * NPC/자동 진행 가계 구매 알고리즘(scoreListingForBuyer)이 필수 카테고리 매물에 주는 가산점.
+ * 만족도 페널티와 스케일이 다른 별도 체계지만 상대적 비율(2:1)은 맞췄다. v1 잠정값.
+ */
+export const ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS: Partial<Record<ProductCategoryId, number>> = {
+  food: 0.15,
+  apparel: 0.075,
+};
+
+export const ESSENTIAL_CATEGORY_IDS: readonly ProductCategoryId[] =
+  Object.keys(ESSENTIAL_CATEGORY_SATISFACTION_PENALTY) as ProductCategoryId[];
+
+export function isEssentialCategory(categoryId: ProductCategoryId): boolean {
+  return categoryId in ESSENTIAL_CATEGORY_SATISFACTION_PENALTY;
+}
+
+export function essentialSatisfactionPenalty(categoryId: ProductCategoryId): number {
+  return ESSENTIAL_CATEGORY_SATISFACTION_PENALTY[categoryId] ?? 0;
+}
+
+export function essentialNpcPriorityBonus(categoryId: ProductCategoryId): number {
+  return ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS[categoryId] ?? 0;
+}
+
 export const NPC_TARGETS = {
-  minCompanies: 4,
-  minStores: 4,
+  /** 카테고리 하나당 최소 몇 개 기업(학생+NPC 합계)이 있어야 하는가. */
+  minCompaniesPerCategory: 2,
+  /** 카테고리 하나당 최소 몇 개 가게(학생+NPC 합계)가 있어야 하는가. */
+  minStoresPerCategory: 2,
   minConsumers: 10,
-  /** 학생 1인당 추가되는 목표 NPC 소비자 수 (시장 규모가 커질수록 소비자도 늘어나야 함). */
-  consumersPerStudent: 1.5,
+  /**
+   * 가게(학생+NPC 합계) 1개당 목표 소비자 수. 학생 수가 아니라 **가게 수**를 기준으로 삼는다
+   * — 모든 참여자는 기업+가게+가계를 함께 수행한다는 원칙(D-001)을 NPC 보충에도 적용한
+   * 것이다 (D-023 후속). 가게(공급)를 카테고리별 최소치로 늘렸는데 소비자(수요)는 학생
+   * 수에만 비례해 그대로 두면, 판매자만 늘고 수요는 그대로라 평균 손익이 오히려 더
+   * 나빠지는 부작용이 있었다 — 가게 수에 연동하면 공급이 늘 때 수요도 함께 는다.
+   */
+  // 예전 값(consumersPerStudent=1.5)은 "학생 자신도 소비자 1명 + 추가 1.5명" = 학생당 총
+  // 2.5명이었다. 가게 수 기준으로 바꾸면서도 가게 수가 안 변한 경우(NPC 가게 보충이 필요
+  // 없던 5/10/20명 시나리오) 목표 소비자 수가 줄어들지 않도록 같은 배율(2.5)을 쓴다.
+  consumersPerStore: 2.5,
 };

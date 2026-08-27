@@ -8,7 +8,8 @@
 import {
   CATEGORY_UNIT_COST,
   COMPANY_STRATEGY_PRESETS,
-  DISTRICTS,
+  companyUnitCost,
+  essentialNpcPriorityBonus,
   HOUSEHOLD_STRATEGY_PRESETS,
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
@@ -25,8 +26,9 @@ import type {
 /** 한 참여자가 매 라운드 생산/매입을 시도하는 기준 수량. 전략 배율이 곱해진다. */
 const BASE_PRODUCTION_QUANTITY = 20;
 const BASE_STORE_PURCHASE_QUANTITY = 15;
-/** 가계 1회 소비가 쏠리지 않도록 하는 상한 (예산 관리, docs/GAME_RULES.md 1절). */
-const MAX_HOUSEHOLD_PURCHASE_UNITS = 6;
+/** 가계 1회 소비가 쏠리지 않도록 하는 상한 (예산 관리, docs/GAME_RULES.md 1절). UI가 사람
+ * 입력 폼에도 같은 상한을 보여줄 수 있도록 export한다 (src/economy/humanDecisions.ts). */
+export const MAX_HOUSEHOLD_PURCHASE_UNITS = 6;
 /** 가격 정규화 기준 배율 (생산단가 대비 "적당한 소매가"로 간주하는 배율). */
 const REFERENCE_PRICE_MULTIPLIER = 2.2;
 
@@ -50,8 +52,7 @@ export function decideCompanyProduction(
     return null;
   }
   const preset = COMPANY_STRATEGY_PRESETS[company.strategyId];
-  const district = DISTRICTS[company.districtId];
-  const unitCost = CATEGORY_UNIT_COST[categoryId] / district.companySuitability;
+  const unitCost = companyUnitCost(categoryId, company.districtId);
 
   // "적정 재고까지만 채운다"(order-up-to) 정책: 이미 안 팔린 재고가 많으면 그만큼 덜
   // 생산한다. 재고를 보지 않고 매번 목표량을 그대로 생산하면 안 팔린 물량이 쌓이는 동안에도
@@ -144,6 +145,7 @@ export function decideHouseholdPurchases(
         listing.categoryId,
         preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6),
         rng,
+        essentialNpcPriorityBonus(listing.categoryId),
       ),
     }))
     .sort((a, b) => b.score - a.score);
@@ -165,18 +167,24 @@ export function decideHouseholdPurchases(
   return { purchases };
 }
 
-/** 가격 대비 품질 점수. qualityWeight=1이면 품질만, 0이면 가격만 본다. 아주 작은 난수로 동점을 깬다. */
-function scoreListingForBuyer(
+/**
+ * 가격 대비 품질 점수. qualityWeight=1이면 품질만, 0이면 가격만 본다. 아주 작은 난수로 동점을
+ * 깬다. priorityBonus는 "필수 소비" 카테고리(docs/DECISIONS.md D-024)에 가계 구매 알고리즘이
+ * 주는 가산점이며, decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상
+ * 기본값 0으로 호출된다.
+ */
+export function scoreListingForBuyer(
   price: number,
   quality: number,
   categoryId: ProductCategoryId,
   qualityWeight: number,
   rng: Rng,
+  priorityBonus = 0,
 ): number {
   const referencePrice = CATEGORY_UNIT_COST[categoryId] * REFERENCE_PRICE_MULTIPLIER;
   const normalizedPrice = price / referencePrice;
   const tieBreak = rngRange(rng, -0.01, 0.01);
-  return qualityWeight * quality - (1 - qualityWeight) * normalizedPrice + tieBreak;
+  return qualityWeight * quality - (1 - qualityWeight) * normalizedPrice + tieBreak + priorityBonus;
 }
 
 function clamp01(value: number): number {

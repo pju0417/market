@@ -41,8 +41,11 @@
 ## 구현 상태 (Milestone 1)
 
 `src/npc/decisions.ts`(의사결정)와 `src/npc/backfill.ts`(보충 계획)로 구현되어 있다. 보충
-로직은 인원수 기반 최소치(`NPC_TARGETS`)와 업종 커버리지 보장(카테고리별 최소 1개 기업/가게)을
-함께 본다 — `tests/npc/backfill.test.ts`가 커버리지 보장을 직접 검증한다.
+로직은 카테고리별 최소치(`NPC_TARGETS.minCompaniesPerCategory`/`minStoresPerCategory`, 기본
+2 — D-023)로 업종 커버리지를 보장한다. 이전에는 "전체 최소치"(카테고리 수와 우연히 같은
+값)라 학생 수가 적을 때 카테고리당 참여자가 1개(독점)까지 줄어드는 문제가 있었다. 지금 방식은
+학생 수와 무관하게 카테고리마다 최소 경쟁자 수를 직접 보장한다 — `tests/npc/backfill.test.ts`가
+이를 직접 검증한다.
 
 NPC/학생 봇의 생산·매입은 "적정 재고까지만 채운다"(order-up-to) 정책이다 — 이미 안 팔린
 재고가 있으면 그만큼 덜 생산/매입한다. 다만 이 정책을 넣어도 순이익 마이너스 추세는 크게
