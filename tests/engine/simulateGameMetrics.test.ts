@@ -395,4 +395,48 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       expect(m1.householdEssentialCategoriesMissed[householdId]).toEqual([]);
     });
   });
+
+  describe("D-026: essential-category penalty judged from a round-start supply snapshot, not live stock", () => {
+    it(
+      "still flags a later-processed household as having missed food when an earlier-processed " +
+        "household already bought the only food listing in the same round",
+      async () => {
+        const state = buildInitialGameState(2, 51001);
+        const student1HouseholdId = "student-1-household";
+        const npcHouseholdId = Object.values(state.households).find((h) => h.kind === "npc")!.id;
+        const sellerStoreId = Object.values(state.stores).find((s) => s.kind === "npc")!.id;
+
+        state.retailListings = [
+          { id: "rl-scarce-food", storeId: sellerStoreId, categoryId: "food", quantityAvailable: 1, quality: 0.5, price: 5 },
+        ];
+
+        const decisionSource: HumanDecisionSource = {
+          getCompanyInput: () => undefined,
+          getStorePurchaseRequest: () => undefined,
+          // student-1's household buys the single food unit during "household-turn" (processed
+          // before "npc-consumer-behavior" in round order); everyone else (student-2's household,
+          // and every NPC household including npcHouseholdId) explicitly requests nothing, so the
+          // scenario is fully deterministic regardless of shuffle order.
+          getHouseholdPurchaseRequest: (id) =>
+            id === student1HouseholdId ? [{ listingId: "rl-scarce-food", quantity: 1 }] : [],
+        };
+
+        const rng = createRng(51002);
+        const handlers = createPhaseHandlers(rng, decisionSource);
+        // Round order (docs/ROUND_FLOW.md): "household-turn" runs before "npc-consumer-behavior".
+        // By the time npc-consumer-behavior processes npcHouseholdId, the live
+        // state.retailListings entry for "rl-scarce-food" already has quantityAvailable === 0
+        // (student-1 depleted it) — D-026's fix means the penalty judgement must still use the
+        // round-start snapshot (taken before student-1 was processed) and flag npcHouseholdId.
+        await handlers["household-turn"]!(state);
+        expect(state.retailListings.find((l) => l.id === "rl-scarce-food")!.quantityAvailable).toBe(0);
+        await handlers["npc-consumer-behavior"]!(state);
+        await handlers["round-settlement"]!(state);
+
+        const m1 = state.roundMetrics[0]!;
+        expect(m1.householdEssentialCategoriesMissed[student1HouseholdId]).toEqual([]);
+        expect(m1.householdEssentialCategoriesMissed[npcHouseholdId]).toContain("food");
+      },
+    );
+  });
 });

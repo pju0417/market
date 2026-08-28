@@ -110,7 +110,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         className="primary"
         disabled={disabled || overBudget || company.productCategoryId === null}
         onClick={() => {
-          session.submitCompanyDecision({ quantity, quality, wholesalePrice });
+          session.submitCompanyDecision(company.id, { quantity, quality, wholesalePrice });
           onSubmitted();
         }}
       >

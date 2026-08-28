@@ -118,7 +118,7 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
           const purchases = eligible
             .map((listing) => ({ listingId: listing.id, quantity: quantities[listing.id] ?? 0 }))
             .filter((line) => line.quantity > 0);
-          session.submitStoreDecision({ purchases, retailPrice });
+          session.submitStoreDecision(store.id, { purchases, retailPrice });
           onSubmitted();
         }}
       >

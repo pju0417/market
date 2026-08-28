@@ -45,6 +45,22 @@
 있다 — `GameSession`은 제출값을 내부 필드에 버퍼링만 하고, `advancePhase()`가 실제로
 `RoundEngine.stepPhase()`를 호출할 때에만 시장 로직에 반영된다.
 
+## 구현 상태 (Milestone 4 1단계)
+
+`GameSession`을 다인원 코어로 리팩터링했다 — 단일 `humanPlayer`/제출 필드 3개를
+`humanPlayers: readonly PlayerState[]`와 참가자 id를 key로 하는 `Map` 3개로 바꿔,
+`submitCompanyDecision(companyId, input)`처럼 **어느 참가자의 제출인지 인자로 명시**하는
+방식으로 바뀌었다. `RoundEngine`/`simulateGame.ts`는 애초에 참가자 id로 조회하는
+`HumanDecisionSource` 인터페이스로 설계돼 있어 전혀 손대지 않았다 — 갭은 `GameSession`
+한 클래스에만 있었다. 다만 이번 단계는 **네트워크가 없는 로컬 프로세스 안에서만** 다인원을
+지원한다(자동화 테스트로만 검증됨, UI/로비는 여전히 1인만 노출). 위 3번 원칙(제출 전
+비공개)은 서버가 없는 한 자동으로 지켜지지만, 서버가 생기면(2단계 이후) "다른 참가자의
+제출 여부/내용을 API로 알아낼 수 있는가"라는 새 위협 모델을 다시 검토해야 한다.
+
+이 리팩터링 과정에서 D-026(후보, 필수 소비 만족도 페널티가 같은 라운드 내 처리 순서에
+좌우되는 문제)의 메커니즘이 여러 실제 참가자가 동시에 household-turn을 수행하는 조건에서
+실제로 재현됨을 확인했다 — 상세는 docs/DECISIONS.md 참고. 공식은 아직 수정하지 않았다.
+
 진짜 네트워크 동기화(여러 기기, 여러 학생이 동시에 접속)와 "제출 안 한 참가자 목록" 같은
-다인원 모니터링 UI는 여전히 Milestone 4 범위다. 다만 `GameSession`의 phase 제어 방식 자체는
-다인원으로 확장해도 구조가 크게 바뀌지 않도록 설계했다 (각 참가자 ID별로 제출 버퍼를 두면 됨).
+다인원 모니터링 UI, 다인원 창업 준비(로비)는 여전히 Milestone 4의 다음 단계(2~4단계,
+docs/TODO.md 참고) 범위다.

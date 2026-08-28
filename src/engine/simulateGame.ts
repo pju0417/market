@@ -33,6 +33,7 @@ import type {
   HouseholdState,
   ParticipantId,
   ProductCategoryId,
+  RetailListing,
   RoundMetrics,
   StoreState,
 } from "../types/domain.js";
@@ -189,6 +190,10 @@ interface RoundAccumulator {
   /** 가계별 × 카테고리별 이번 라운드 지출 (householdCategoryCount/householdTopCategorySpendShare 계산용). */
   householdSpendByCategory: Record<ParticipantId, Partial<Record<ProductCategoryId, number>>>;
   householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
+  /** D-026: 이번 라운드 가계 소비 처리(household-turn/npc-consumer-behavior 공용) 시작 시점의
+   *  state.retailListings 스냅샷. null이면 아직 이번 라운드에 계산 안 함 — runConsumerPurchases가
+   *  라운드 내 처음 호출될 때 그 자리에서 한 번만 채운다. */
+  roundStartRetailListings: RetailListing[] | null;
 }
 
 function freshAccumulator(): RoundAccumulator {
@@ -211,6 +216,7 @@ function freshAccumulator(): RoundAccumulator {
     householdUnitsBought: {},
     householdSpendByCategory: {},
     householdEssentialCategoriesMissed: {},
+    roundStartRetailListings: null,
   };
 }
 
@@ -354,6 +360,11 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
   }
 
   function runConsumerPurchases(state: GameState, householdIds: readonly ParticipantId[]): void {
+    if (acc.roundStartRetailListings === null) {
+      acc.roundStartRetailListings = state.retailListings.map((l) => ({ ...l }));
+    }
+    const roundStartListings = acc.roundStartRetailListings;
+
     const orderedIds = shuffle(rng, householdIds);
     for (const householdId of orderedIds) {
       const household = state.households[householdId]!;
@@ -397,8 +408,9 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       const rawSatisfaction = unitsBought > 0 ? qualityUnits / unitsBought : 0;
       let essentialPenalty = 0;
       const missedEssentialCategories: ProductCategoryId[] = [];
+      const eligibleAtRoundStart = eligibleRetailListingsForHousehold(household, roundStartListings, state.stores);
       for (const categoryId of ESSENTIAL_CATEGORY_IDS) {
-        const wasAvailable = eligible.some((l) => l.categoryId === categoryId && l.quantityAvailable > 0);
+        const wasAvailable = eligibleAtRoundStart.some((l) => l.categoryId === categoryId && l.quantityAvailable > 0);
         const bought = unitsByCategory[categoryId] ?? 0;
         if (wasAvailable && bought <= 0) {
           essentialPenalty += essentialSatisfactionPenalty(categoryId);

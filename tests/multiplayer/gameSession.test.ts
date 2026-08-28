@@ -40,7 +40,7 @@ describe("GameSession (D-021: single human player)", () => {
 
   it("advances immediately once the human submits a decision", async () => {
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 10, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 10, quality: 0.5, wholesalePrice: 8 });
 
     expect(session.isWaitingForHumanInput()).toBe(false);
     const result = await session.advancePhase();
@@ -52,18 +52,18 @@ describe("GameSession (D-021: single human player)", () => {
   it("rejects a submission for the wrong phase", () => {
     const session = new GameSession(1);
 
-    expect(() => session.submitStoreDecision({ purchases: [] })).toThrow();
+    expect(() => session.submitStoreDecision(session.getHumanPlayer().storeId, { purchases: [] })).toThrow();
   });
 
   it("lets the human set an explicit retail price, even with zero purchases this round", async () => {
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 10, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 10, quality: 0.5, wholesalePrice: 8 });
     await session.advancePhase(); // company-turn
     await session.advancePhase(true); // company-settlement
     await session.advancePhase(true); // wholesale-market-update
 
     expect(session.getState().currentPhase).toBe("store-turn");
-    session.submitStoreDecision({ purchases: [], retailPrice: 12.5 });
+    session.submitStoreDecision(session.getHumanPlayer().storeId, { purchases: [], retailPrice: 12.5 });
     await session.advancePhase();
 
     const player = session.getHumanPlayer();
@@ -72,7 +72,7 @@ describe("GameSession (D-021: single human player)", () => {
 
   it("clears pending submissions after advancing, so the next round needs a fresh submission", async () => {
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 5, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 5, quality: 0.5, wholesalePrice: 8 });
     await session.advancePhase();
 
     // company-settlement phase does not require input; force through the rest with bots
@@ -93,9 +93,10 @@ describe("GameSession (D-021: single human player)", () => {
     // note). That only works if every state-mutating entry point below bumps the version; if a
     // future method forgets to call notify(), those memos would silently go stale.
     const session = new GameSession(1);
+    const player = session.getHumanPlayer();
     let version = session.getVersion();
 
-    session.submitCompanyDecision({ quantity: 5, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(player.companyId, { quantity: 5, quality: 0.5, wholesalePrice: 8 });
     expect(session.getVersion()).toBeGreaterThan(version);
     version = session.getVersion();
 
@@ -108,7 +109,7 @@ describe("GameSession (D-021: single human player)", () => {
     expect(session.getState().currentPhase).toBe("store-turn");
     version = session.getVersion();
 
-    session.submitStoreDecision({ purchases: [], retailPrice: 10 });
+    session.submitStoreDecision(player.storeId, { purchases: [], retailPrice: 10 });
     expect(session.getVersion()).toBeGreaterThan(version);
     version = session.getVersion();
 
@@ -118,7 +119,7 @@ describe("GameSession (D-021: single human player)", () => {
     expect(session.getState().currentPhase).toBe("household-turn");
     version = session.getVersion();
 
-    session.submitHouseholdPurchases([]);
+    session.submitHouseholdPurchases(player.householdId, []);
     expect(session.getVersion()).toBeGreaterThan(version);
   });
 
@@ -129,7 +130,7 @@ describe("GameSession (D-021: single human player)", () => {
       notifications += 1;
     });
 
-    session.submitCompanyDecision({ quantity: 1, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 1, quality: 0.5, wholesalePrice: 8 });
     await session.advancePhase();
 
     expect(notifications).toBe(2);
@@ -148,7 +149,7 @@ describe("GameSession (D-021: single human player)", () => {
 
   it("dedupes overlapping advancePhase() calls instead of executing the phase twice (regression: React StrictMode double-invoke)", async () => {
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 10, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 10, quality: 0.5, wholesalePrice: 8 });
 
     // Two overlapping calls, neither awaited before the other starts — this is exactly what
     // React StrictMode's deliberate double effect-invocation produces in development.
@@ -186,7 +187,7 @@ describe("GameSession (D-021: single human player)", () => {
     // phase after any human submission. This subscriber pattern is exactly what
     // src/ui/App.tsx's auto-advance effect does in practice.
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 10, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 10, quality: 0.5, wholesalePrice: 8 });
 
     const silentPhases = new Set([
       "company-settlement",
@@ -247,7 +248,7 @@ describe("GameSession persistence (LocalStorageAdapter wiring)", () => {
     const session = new GameSession(1);
     session.enableAutoSave(storage);
 
-    session.submitCompanyDecision({ quantity: 5, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 5, quality: 0.5, wholesalePrice: 8 });
     // Nothing persisted yet — only a pending submission, no phase has completed.
     await expect(storage.get(SAVED_SESSION_STORAGE_KEY)).resolves.toBeUndefined();
 
@@ -297,9 +298,137 @@ describe("GameSession persistence (LocalStorageAdapter wiring)", () => {
   it("a session without enableAutoSave never writes to storage", async () => {
     const storage = new MemoryStorageAdapter();
     const session = new GameSession(1);
-    session.submitCompanyDecision({ quantity: 5, quality: 0.5, wholesalePrice: 8 });
+    session.submitCompanyDecision(session.getHumanPlayer().companyId, { quantity: 5, quality: 0.5, wholesalePrice: 8 });
     await session.advancePhase();
 
     await expect(GameSession.loadSaved(storage)).resolves.toBeUndefined();
   });
+});
+
+describe("GameSession multiplayer core (Milestone 4 1단계: studentCount > 1, still no network)", () => {
+  it("tracks each human player's submission independently and only stops waiting once everyone has submitted", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const players = session.getPlayers();
+    expect(players).toHaveLength(3);
+
+    const input = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+    session.submitCompanyDecision(players[0]!.companyId, input);
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    session.submitCompanyDecision(players[1]!.companyId, input);
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    expect(session.getUnsubmittedParticipantIds()).toEqual([players[2]!.companyId]);
+
+    session.submitCompanyDecision(players[2]!.companyId, input);
+    expect(session.isWaitingForHumanInput()).toBe(false);
+    expect(session.getUnsubmittedParticipantIds()).toEqual([]);
+  });
+
+  it("rejects advancePhase() while any human player hasn't submitted, and force=true bot-fallbacks the rest", async () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const players = session.getPlayers();
+    const input = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+
+    session.submitCompanyDecision(players[0]!.companyId, input);
+    session.submitCompanyDecision(players[1]!.companyId, input);
+    // players[2] deliberately never submits this phase.
+
+    await expect(session.advancePhase()).rejects.toThrow();
+
+    const stragglerCompanyId = players[2]!.companyId;
+    const cashBefore = session.getState().companies[stragglerCompanyId]!.ledger.cash;
+
+    const result = await session.advancePhase(true);
+
+    expect(result.phase).toBe("company-turn");
+    // The unsubmitted student's company still ran through the same bot policy every NPC uses
+    // (src/npc/decisions.ts) instead of crashing or being silently skipped — fixed costs alone
+    // guarantee its cash changed, regardless of what quantity/price the bot happened to pick.
+    const cashAfter = session.getState().companies[stragglerCompanyId]!.ledger.cash;
+    expect(cashAfter).not.toBe(cashBefore);
+  });
+
+  it("rejects submissions for a companyId that isn't one of this session's human players", () => {
+    const session = new GameSession(1, undefined, undefined, 2);
+    const npcCompanyId = Object.values(session.getState().companies).find((c) => c.kind === "npc")!.id;
+    const input = { quantity: 1, quality: 0.5, wholesalePrice: 1 };
+
+    expect(() => session.submitCompanyDecision("no-such-company", input)).toThrow();
+    // An NPC's id is a real key in state.companies, but it isn't a human player's — submitting
+    // "as" an NPC must be rejected the same way an outright unknown id is.
+    expect(() => session.submitCompanyDecision(npcCompanyId, input)).toThrow();
+  });
+
+  it(
+    "D-026 resolved: 필수재 페널티 판정이 라운드 시작 공급 스냅샷 기준이라 가계 처리 순서와 " +
+      "무관하게 결정론적이다",
+    async () => {
+      // Setup, per round: exactly one unit of the essential "food" category is on offer this
+      // phase, from an NPC-owned store (so both human households are equally eligible buyers).
+      // Household A always buys that single unit; household B never requests it at all. Which
+      // one of A/B is processed first by the engine's `shuffle(rng, householdIds)` (src/engine/
+      // simulateGame.ts's runConsumerPurchases) is decided purely by the session's rngSeed, which
+      // this test does not control directly (that shuffle is intentionally not something the
+      // multiplayer session layer is supposed to touch — Milestone 4 1단계 scope is GameSession,
+      // not economy/engine internals). D-026 fixed the penalty judgement to use a snapshot of
+      // state.retailListings taken right when this round's consumer-purchase phase starts (before
+      // either household is processed), so the shuffle order no longer changes the outcome. We
+      // still sweep many seeds to prove that determinism holds regardless of processing order.
+      async function runScenario(seed: number): Promise<{ aMissedFood: boolean; bMissedFood: boolean }> {
+        const session = new GameSession(seed, undefined, undefined, 2);
+        while (session.getState().currentPhase !== "household-turn") {
+          await session.advancePhase(true);
+        }
+
+        const state = session.getState();
+        const [playerA, playerB] = session.getPlayers();
+        const householdAId = playerA!.householdId;
+        const householdBId = playerB!.householdId;
+
+        // Collapse whatever "food" listings NPC backfill happened to produce this round, then
+        // inject exactly one scarce, affordable one so the scenario is identical every seed.
+        for (const listing of state.retailListings) {
+          if (listing.categoryId === "food") listing.quantityAvailable = 0;
+        }
+        const npcStoreId = Object.values(state.stores).find((s) => s.kind === "npc")!.id;
+        const scarceListingId = "d026-scarce-food";
+        state.retailListings.push({
+          id: scarceListingId,
+          storeId: npcStoreId,
+          categoryId: "food",
+          quantityAvailable: 1,
+          quality: 0.5,
+          price: 5,
+        });
+
+        session.submitHouseholdPurchases(householdAId, [{ listingId: scarceListingId, quantity: 1 }]);
+        session.submitHouseholdPurchases(householdBId, []);
+        await session.advancePhase();
+
+        while (session.getState().roundMetrics.length === 0) {
+          await session.advancePhase(true);
+        }
+
+        const metrics = session.getState().roundMetrics[0]!;
+        const aMissed = metrics.householdEssentialCategoriesMissed[householdAId] ?? [];
+        const bMissed = metrics.householdEssentialCategoriesMissed[householdBId] ?? [];
+        return { aMissedFood: aMissed.includes("food"), bMissedFood: bMissed.includes("food") };
+      }
+
+      const outcomes = new Set<boolean>();
+      for (let seed = 1; seed <= 200; seed += 1) {
+        const { aMissedFood, bMissedFood } = await runScenario(seed);
+        // Household A gets the single unit whenever it's processed (whether first or after B,
+        // since B never touches the listing) — this held for every seed observed in this sweep.
+        expect(aMissedFood).toBe(false);
+        outcomes.add(bMissedFood);
+      }
+
+      // D-026 resolved: the penalty judgement now uses the round-start retail listings snapshot
+      // (frozen before either household is processed), so household B — which never buys food in
+      // either processing order — is charged the essential-goods penalty every single time,
+      // regardless of shuffle order. Only `true` should ever appear across the whole seed sweep.
+      expect(outcomes.size).toBe(1);
+      expect(outcomes.has(true)).toBe(true);
+    },
+  );
 });

@@ -98,7 +98,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
           const purchases = eligible
             .map((listing) => ({ listingId: listing.id, quantity: quantities[listing.id] ?? 0 }))
             .filter((line) => line.quantity > 0);
-          session.submitHouseholdPurchases(purchases);
+          session.submitHouseholdPurchases(household.id, purchases);
           onSubmitted();
         }}
       >

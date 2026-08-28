@@ -4,7 +4,9 @@
  * 네트워크 없음) 버전이지만, phase가 실행되는 순간까지 제출된 입력을 다른 참가자에게
  * 노출하지 않는다는 담합 방지 원칙(GAME_RULES.md 2절)은 그대로 지킨다.
  *
- * D-021: 이번 범위는 학생 1명(사람)만 플레이한다. 사람이 조종하는 기업/가게/가계는 각
+ * D-021 → Milestone 4 1단계: 처음에는 학생 1명(사람)만 지원했지만, 이제 `studentCount`로
+ * 여러 학생을 같은 세션에서 동시에 조종할 수 있다(여전히 네트워크 없음 — 한 기기/프로세스
+ * 안에서 여러 참가자의 제출을 모아 두는 구조). 각 학생이 조종하는 기업/가게/가계는 각
  * phase마다 최대 한 번 결정을 제출할 수 있고, 제출하지 않은 채 강제로 phase를 넘기면
  * (또는 사람이 조종하지 않는 나머지 모든 참여자는 애초에) 기존 봇 정책으로 자동 처리된다 —
  * NPC와 동일한 코드 경로(src/npc/decisions.ts)이므로 무한자산 등 특혜는 없다.
@@ -66,10 +68,12 @@ function isPlausibleGameState(value: unknown): value is GameState {
 export class GameSession {
   private readonly engine: RoundEngine;
   private readonly state: GameState;
-  private readonly humanPlayer: PlayerState;
-  private pendingCompanyInput: CompanyDecisionInput | undefined;
-  private pendingStoreRequest: StoreDecisionInput | undefined;
-  private pendingHouseholdRequest: PurchaseRequestLine[] | undefined;
+  /** 이 세션에서 사람이 조종하는 전원. `GameState.players`는 애초에 학생(사람) 참가자만
+   * 담으므로(NPC는 별도 레코드), `this.state.players` 자체가 곧 사람 플레이어 목록이다. */
+  private readonly humanPlayers: readonly PlayerState[];
+  private readonly pendingCompanyInputs = new Map<ParticipantId, CompanyDecisionInput>();
+  private readonly pendingStoreRequests = new Map<ParticipantId, StoreDecisionInput>();
+  private readonly pendingHouseholdRequests = new Map<ParticipantId, PurchaseRequestLine[]>();
   private readonly listeners = new Set<() => void>();
   private version = 0;
   private advancingPromise: Promise<StepOutcome> | undefined;
@@ -77,24 +81,39 @@ export class GameSession {
 
   /**
    * resumeState를 주면 새로 만들지 않고 저장된 상태를 그대로 이어서 쓴다 (새로고침 복원용,
-   * `GameSession.resumeFromState` 참고). 이 경우 rngSeed/setupChoices는 무시된다 — 이미
-   * 확정된 상태와 그 안의 config.rngSeed를 그대로 쓴다.
+   * `GameSession.resumeFromState` 참고). 이 경우 rngSeed/setupChoices/studentCount는
+   * 무시된다 — 이미 확정된 상태와 그 안의 config.rngSeed, 그리고 저장된 `players` 배열을
+   * 그대로 쓴다.
    *
    * 주의: 재개 시 봇 결정에 쓰는 PRNG는 원래 게임과 완전히 같은 순서로 이어지지 않는다
    * (내부 시드 상태를 직렬화하지 않기 때문— 매 phase 결과까지 저장/복원하는 것은 과한
    * 설계라 판단했다). 대신 라운드 번호를 섞어 시드를 다시 만들어, 재개 직후 봇 결정이
    * 라운드 1과 완전히 똑같이 반복되는 것만 피한다. 저장 자체는 phase가 완전히 끝난 뒤의
    * 확정된 GameState만 다루므로 이 때문에 데이터 무결성이 깨지지는 않는다.
+   *
+   * `studentCount`는 맨 뒤에 기본값 1로 추가했다 — 기존 호출부 `new GameSession(seed)`,
+   * `new GameSession(seed, choices)`가 자리/의미를 그대로 유지하면서 계속 동작해야 하기
+   * 때문이다(중간에 끼워 넣으면 기존 호출의 인자 의미가 바뀐다). `BusinessSetupChoices`는
+   * 아직 "단일 플레이어가 자기 창업을 고른다"는 모양 그대로다 — 여러 학생 각자의 창업
+   * 준비 UI/데이터 모델은 Milestone 4 다음 단계(다인원 로비)에서 다룬다. 따라서
+   * `studentCount > 1`일 때는 setupChoices를 아예 적용하지 않고 엔진의 기본 배정
+   * (buildInitialGameState의 카테고리/상권 순환 배정)을 그대로 쓴다 — 특정 학생 한 명에게만
+   * 적용하면 나머지 학생과 취급이 달라져 오히려 혼란스럽다고 판단했다.
    */
-  constructor(rngSeed: number = Date.now(), setupChoices?: BusinessSetupChoices, resumeState?: GameState) {
-    this.state = resumeState ?? buildInitialGameState(1, rngSeed);
-    const player = this.state.players[0];
-    if (!player) {
-      throw new Error("buildInitialGameState(1, ...) must always create exactly one player");
+  constructor(
+    rngSeed: number = Date.now(),
+    setupChoices?: BusinessSetupChoices,
+    resumeState?: GameState,
+    studentCount: number = 1,
+  ) {
+    this.state = resumeState ?? buildInitialGameState(studentCount, rngSeed);
+    this.humanPlayers = this.state.players;
+    if (this.humanPlayers.length === 0) {
+      throw new Error("GameSession requires at least one human player");
     }
-    this.humanPlayer = player;
 
-    if (setupChoices && !resumeState) {
+    if (setupChoices && !resumeState && this.humanPlayers.length === 1) {
+      const player = this.humanPlayers[0]!;
       const company = this.state.companies[player.companyId]!;
       company.districtId = setupChoices.companyDistrictId;
       company.productCategoryId = setupChoices.companyCategoryId;
@@ -104,10 +123,9 @@ export class GameSession {
     }
 
     const decisionSource: HumanDecisionSource = {
-      getCompanyInput: (id) => (id === this.humanPlayer.companyId ? this.pendingCompanyInput : undefined),
-      getStorePurchaseRequest: (id) => (id === this.humanPlayer.storeId ? this.pendingStoreRequest : undefined),
-      getHouseholdPurchaseRequest: (id) =>
-        id === this.humanPlayer.householdId ? this.pendingHouseholdRequest : undefined,
+      getCompanyInput: (id) => this.pendingCompanyInputs.get(id),
+      getStorePurchaseRequest: (id) => this.pendingStoreRequests.get(id),
+      getHouseholdPurchaseRequest: (id) => this.pendingHouseholdRequests.get(id),
     };
 
     const effectiveSeed = this.state.config.rngSeed;
@@ -156,39 +174,75 @@ export class GameSession {
     return this.version;
   }
 
+  /**
+   * @deprecated 다인원(`studentCount > 1`) 세션에서는 어떤 학생을 가리키는지 모호하므로
+   * 쓰지 마라 — 대신 `getPlayers()`로 전원을 받아 화면/참가자별로 다뤄라. 이 세션이 정확히
+   * 학생 1명짜리일 때만 그 학생을 반환한다. 다인원인데도 이 메서드가 조용히 첫 번째 학생을
+   * 반환하면, 호출부가 실수로 그 한 명만 계속 조종하는 버그를 알아채기 어렵다고 판단해
+   * 명시적으로 에러를 던진다.
+   */
   getHumanPlayer(): Readonly<PlayerState> {
-    return this.humanPlayer;
+    if (this.humanPlayers.length !== 1) {
+      throw new Error(
+        `getHumanPlayer() only supports a single-human session (this session has ${this.humanPlayers.length}); use getPlayers() instead`,
+      );
+    }
+    return this.humanPlayers[0]!;
   }
 
-  /** 현재 phase가 사람 입력을 필요로 하는데 아직 제출되지 않았는가. */
+  /** 이 세션에서 사람이 조종하는 학생 전원. 다인원 UI(로비, 참가자별 화면 라우팅 등)는 이걸 써야 한다. */
+  getPlayers(): readonly PlayerState[] {
+    return this.humanPlayers;
+  }
+
+  /** 현재 phase에 필요한 제출 중 아직 안 된 게 있는지. 사람 입력이 필요 없는 phase는 항상 false. */
   isWaitingForHumanInput(): boolean {
+    return this.getUnsubmittedParticipantIds().length > 0;
+  }
+
+  /**
+   * 현재 phase에서 제출이 필요한데 아직 제출하지 않은 참가자 id 목록. 사람 입력이 필요 없는
+   * phase에서는 항상 빈 배열이다. 지금은 `isWaitingForHumanInput()`의 근거로만 쓰이지만,
+   * 향후 "누가 아직 제출 안 했는지" 보여주는 UI나 제출 타임아웃 로직(Milestone 4 3단계)이
+   * 이 메서드를 그대로 재사용할 수 있도록 미리 만들어 둔다.
+   */
+  getUnsubmittedParticipantIds(): ParticipantId[] {
     switch (this.state.currentPhase) {
       case "company-turn":
-        return this.pendingCompanyInput === undefined;
+        return this.humanPlayers.map((p) => p.companyId).filter((id) => !this.pendingCompanyInputs.has(id));
       case "store-turn":
-        return this.pendingStoreRequest === undefined;
+        return this.humanPlayers.map((p) => p.storeId).filter((id) => !this.pendingStoreRequests.has(id));
       case "household-turn":
-        return this.pendingHouseholdRequest === undefined;
+        return this.humanPlayers.map((p) => p.householdId).filter((id) => !this.pendingHouseholdRequests.has(id));
       default:
-        return false;
+        return [];
     }
   }
 
-  submitCompanyDecision(input: CompanyDecisionInput): void {
+  submitCompanyDecision(companyId: ParticipantId, input: CompanyDecisionInput): void {
     this.assertPhase("company-turn");
-    this.pendingCompanyInput = input;
+    if (!this.humanPlayers.some((p) => p.companyId === companyId)) {
+      throw new Error(`Unknown or non-human companyId "${companyId}"`);
+    }
+    this.pendingCompanyInputs.set(companyId, input);
     this.notify();
   }
 
-  submitStoreDecision(input: StoreDecisionInput): void {
+  submitStoreDecision(storeId: ParticipantId, input: StoreDecisionInput): void {
     this.assertPhase("store-turn");
-    this.pendingStoreRequest = input;
+    if (!this.humanPlayers.some((p) => p.storeId === storeId)) {
+      throw new Error(`Unknown or non-human storeId "${storeId}"`);
+    }
+    this.pendingStoreRequests.set(storeId, input);
     this.notify();
   }
 
-  submitHouseholdPurchases(lines: PurchaseRequestLine[]): void {
+  submitHouseholdPurchases(householdId: ParticipantId, lines: PurchaseRequestLine[]): void {
     this.assertPhase("household-turn");
-    this.pendingHouseholdRequest = lines;
+    if (!this.humanPlayers.some((p) => p.householdId === householdId)) {
+      throw new Error(`Unknown or non-human householdId "${householdId}"`);
+    }
+    this.pendingHouseholdRequests.set(householdId, lines);
     this.notify();
   }
 
@@ -223,9 +277,9 @@ export class GameSession {
     // 자체가 끝난 뒤에야 지워지므로 늦는다.
     const run = async (): Promise<StepOutcome> => {
       const result = await this.engine.stepPhase();
-      this.pendingCompanyInput = undefined;
-      this.pendingStoreRequest = undefined;
-      this.pendingHouseholdRequest = undefined;
+      this.pendingCompanyInputs.clear();
+      this.pendingStoreRequests.clear();
+      this.pendingHouseholdRequests.clear();
       this.advancingPromise = undefined;
       this.notify();
       await this.persist();

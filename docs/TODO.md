@@ -301,12 +301,96 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
 
 ## Milestone 4 — 실제 멀티플레이
 
-[MULTIPLAYER_DESIGN.md](MULTIPLAYER_DESIGN.md)의 동시 턴 동기화 구현.
+[MULTIPLAYER_DESIGN.md](MULTIPLAYER_DESIGN.md)의 동시 턴 동기화 구현. architect 로드맵: 1단계
+`GameSession` 다인원 코어 리팩터링(네트워크 없음) → 2단계 로컬 폴링 서버 → 3단계 제출
+타임아웃/제출현황 UI/담합 방지 → 4단계 다인원 로비 → 5단계 D-026 재검토 → 6단계 안정화.
+(D-026은 economy-reviewer 권고에 따라 "5단계" 라벨보다 앞당겨, 4단계 다인원 로비 오픈 전
+필수 선행 작업으로 이미 해결책 A로 확정·구현 완료했다 — 아래 항목 참고.)
 
-- [ ] D-026(후보) 재검토 — 만족도 페널티(D-024)의 `wasAvailable` 게이팅이 같은 라운드 내
-      처리 순서에 좌우되는 문제. 다인원 실제 플레이가 열리면(여러 실제 학생이 같은
-      household-turn 안에서 경쟁) 순서상 늦은 학생이 부당하게 페널티를 면제/부과받을 수
-      있는지 실측 확인 필요. 상세는 docs/DECISIONS.md D-026 참고.
+- [x] **1단계: `GameSession` 다인원 코어 리팩터링 (네트워크 없음)** — architect가 확인한 대로
+      갭이 엔진(`src/engine`, `src/economy`, `src/npc`, `src/advisor`)이 아니라
+      `GameSession` 한 클래스에 집중돼 있어, 이 파일들은 전혀 건드리지 않고 구현했다.
+      - 생성자에 `studentCount: number = 1`을 **마지막 인자**로 추가(기존
+        `new GameSession(seed)`/`new GameSession(seed, choices)` 호출 호환 유지).
+        `studentCount > 1`이면 `BusinessSetupChoices`는 무시하고 엔진 기본 배정을 그대로
+        쓴다(여러 학생 각자의 창업 준비 UI는 다음 단계 — 다인원 로비 — 로 이월).
+      - 단일 `humanPlayer` → `humanPlayers: readonly PlayerState[]`(= `state.players`) +
+        신규 `getPlayers()`. `getHumanPlayer()`는 `@deprecated`로 남기고 `studentCount>1`이면
+        명시적으로 에러를 던진다(첫 번째 학생만 조용히 반환하는 오용을 막기 위해).
+      - `pendingCompanyInput`/`pendingStoreRequest`/`pendingHouseholdRequest`(단일 필드)를
+        `Map<ParticipantId, ...>` 3개로 교체.
+      - `submitCompanyDecision`/`submitStoreDecision`/`submitHouseholdPurchases`가 참가자
+        id를 첫 인자로 받도록 시그니처 변경(breaking change, 의도됨) — id가 이 세션의 실제
+        학생 소유가 아니면(존재하지 않거나 NPC id면) 에러.
+      - `isWaitingForHumanInput()`을 "현재 phase에 필요한 제출 중 하나라도 비어 있으면
+        true"로 일반화, 신규 `getUnsubmittedParticipantIds()` 추가(3단계 제출현황/타임아웃
+        UI에서 재사용 예정, 이번 단계 UI에서는 미사용).
+      - 세 턴 화면의 제출 호출부에 `company.id`/`store.id`/`household.id` 인자만 추가
+        (렌더링/로컬 state/UX 무변경), `App.tsx`는 여전히 `studentCount` 없이(=1) 세션 생성.
+      - 검증: `typecheck`(양쪽 tsconfig)·`lint --max-warnings=0`·`test`(262개, 기존 24개는
+        호출부에 id 인자만 추가하는 순수 시그니처 정합 + 신규 4개)·`build` 모두 통과.
+        `simulate:class`/`validate:economy` 수치 완전 동일(헤드리스 시뮬레이터는
+        `GameSession`을 쓰지 않으므로 예상대로 무영향, `src/engine`/`src/economy`/`src/npc`/
+        `src/advisor` diff 없음으로 재확인).
+      - **D-026(후보) 실측 결과**: `tests/multiplayer/gameSession.test.ts`에 seed 1~40
+        스윕 테스트로 재현 — 가계 A(항상 희소 필수재를 산다)와 가계 B(그 카테고리를 아예
+        요청하지 않는다)가 같은 household-turn에서 경쟁할 때, 시장에 그 카테고리 매물이
+        정확히 1개뿐이면 **B가 페널티를 받는지 여부가 순전히 엔진 내부 처리 순서에 따라
+        갈리는 것을 실제로 확인**했다: B가 A보다 먼저 처리되면(매물이 아직 있을 때 B의
+        `wasAvailable` 스냅숏이 찍힘) 페널티를 받고, A보다 나중에 처리되면(A가 이미
+        사가 버린 뒤 스냅숏이 찍힘) 똑같이 못 샀는데도 페널티를 면제받는다. A는 두 순서
+        모두에서 항상 구매에 성공한다(B가 그 매물을 건드리지 않으므로). 40개 시드 전부에서
+        A의 미충족은 0건, B는 `true`/`false`가 각각 최소 1회 이상 관측됨 — D-026 후보가
+        예측한 메커니즘을 다인원 조건에서 처음으로 직접 재현했다. **페널티 공식
+        (`src/engine/simulateGame.ts`)은 관찰만 하고 수정하지 않았다** — 조정 여부는
+        아래 "5단계"에서 economy-reviewer 검토·사용자 승인을 거쳐 결정한다.
+      - **economy-reviewer 추가 실측(시드 1~200 확장)**: B의 부당한 페널티 발생 비율이
+        52.5%(true) vs 47.5%(false)로 사실상 동전 던지기 수준임을 확인. 나아가 실제
+        학급 규모별 "그 카테고리 매물이 있었는데 못 산" 비율(순서 효과가 작동할 수 있는
+        필요조건)을 직접 측정한 결과 **5명 학급에서도 의류(apparel) 기준 92.0%**로 이미
+        상시 조건임이 드러났다(식품은 학급 규모에 비례해 2.9%→10.0%→26.7%). 즉 이 문제는
+        "먼 미래의 드문 코너케이스"가 아니라 다인원이 켜지는 즉시 거의 매 라운드 나타날
+        조건이다 — **"5단계"라는 순서 라벨과 무관하게, 다인원 로비(4단계)로 실제 학생이
+        붙기 전에 반드시 해결책을 확정해야 한다**(아래 5단계 항목 갱신 참고). (참고,
+        범위 밖 관찰: 의류가 학급 규모와 무관하게 만성적으로 희소한 것 자체는 D-026과
+        별개의 기존 공급/수요 밸런스 신호일 수 있음 — 조정 제안 없이 사실만 기록.)
+      - **economy-reviewer가 새로 발견한 별개 이슈(참가자 인증 부재)**: `submitCompanyDecision(companyId, input)`
+        등은 "이 id가 이 세션 소속 학생 중 하나인가"만 검증하고, **호출자가 실제로 그
+        학생 본인인지는 검증하지 않는다**(직접 테스트로 확인: 학생 B의 companyId를 인자로
+        넘기면 아무 코드에서나 학생 B 명의로 제출이 성공함). 지금은 네트워크가 없어 같은
+        프로세스의 신뢰된 코드만 이 메서드를 호출할 수 있고 `studentCount=1`(D-021)이라
+        스푸핑할 다른 학생 id 자체가 없어 실질적 위험은 0이지만, **2단계(로컬 폴링 서버)에서
+        여러 기기/탭이 하나의 세션에 요청을 보내게 되면 참가자별 인증(세션 토큰 등) 계층이
+        `GameSession` 앞에 반드시 있어야 한다** — 2단계 설계에 필수로 반영.
+- [ ] 2단계: 로컬 폴링 서버 (같은 기기/네트워크 안에서 여러 브라우저 탭·기기가 하나의
+      `GameSession`을 공유하도록 폴링 기반 동기화 — WebSocket 등은 이번 단계 범위 밖).
+      **설계에 반드시 포함**: 참가자별 인증(세션 토큰 등)을 `GameSession` 제출 API 앞에
+      추가해, 한 참가자가 다른 참가자의 companyId/storeId/householdId로 제출하는 것을
+      실제로 막아야 한다(1단계에서 economy-reviewer가 발견 — 지금은 id 소속 검증만 있고
+      호출자 본인 확인이 없음).
+- [ ] 3단계: 제출 타임아웃, "누가 아직 제출 안 했는지" 보여주는 UI, 담합 방지(제출 마감
+      전까지 다른 참가자의 제출 내용을 노출하지 않는 것은 이미 지키고 있음 — 이 단계는 그
+      원칙이 실제 여러 기기 환경에서도 깨지지 않는지 확인하고 타임아웃 정책을 추가하는 것).
+- [ ] 4단계: 다인원 로비 — 여러 학생 각자의 창업 준비(상권/업종 선택)를 받는 화면.
+      `BusinessSetupChoices`를 다인원용으로 확장하는 설계가 이 단계에서 필요하다.
+      (선행 조건이었던 D-026 해결책 확정은 아래 항목대로 이미 완료됨.)
+- [x] D-026(후보) 해결책 확정 — 사용자가 해결책 A를 승인, 구현 완료. 판정 기준을 "그 라운드
+      소매시장 갱신 직후(가계 소비 시작 전) 공급 스냅숏"으로 바꿔 처리 순서 의존성을 구조적으로
+      제거했다. `src/engine/simulateGame.ts`의 `RoundAccumulator`에 `roundStartRetailListings`
+      필드를 추가해 `runConsumerPurchases`(household-turn/npc-consumer-behavior 공용) 최초
+      호출 시점에 한 번만 `state.retailListings`를 얕은 복사해 고정하고, 페널티 판정
+      (`wasAvailable`)만 이 스냅숏 기준으로 재계산했다 — 실제 구매 매칭과 페널티 공식(임계값/
+      합산/스무딩)은 무변경. `tests/multiplayer/gameSession.test.ts`의 D-026 테스트를 "처리
+      순서 무관 결정론적"으로 뒤집어 시드 1~200 전부 통과, `tests/engine/simulateGameMetrics.test.ts`에
+      studentCount=2 신규 회귀 테스트 추가(스냅숏 기준으로 정상 페널티 확인), 기존 D-024
+      단일가계 손계산 테스트 5개는 예측대로 무수정 통과. 전체 테스트/typecheck/lint/build 통과.
+      `simulate:class`(seed 42) 재검증: avgCompanyProfit/avgStoreProfit/생존 기업·가게 수는
+      1/5/10/20명 전 시나리오에서 완전 동일, `finalSatisfaction`만 1명 0.46→0.40, 5명
+      0.46→0.35, 10명 0.48→0.35, 20명 0.40→0.30으로 하락(0.2 이하로 떨어진 시나리오 없음).
+      `validate:economy` 데이터 무결성 위반 0건, determinism 유지. finalSatisfaction 하락
+      자체는 새 밸런스 신호이며 추가 조정 없이 수치만 기록(이번 승인 범위 밖). 상세는
+      docs/DECISIONS.md D-026 항목 참고.
+- [ ] 6단계: 안정화 — 다인원 시나리오 전반 회귀 테스트, 브라우저 수동 검증, 성능/UX 마무리.
 
 ## Milestone 5 — Google Sheets / Apps Script Adapter
 
