@@ -28,6 +28,9 @@ function checkIntegrity(state: GameState, scenario: string): IntegrityViolation[
     if (company.inventoryQuantity < 0) {
       violations.push({ scenario, message: `company ${company.id} has negative inventory: ${company.inventoryQuantity}` });
     }
+    if (!Number.isInteger(company.inventoryQuantity)) {
+      violations.push({ scenario, message: `company ${company.id} has non-integer inventory: ${company.inventoryQuantity}` });
+    }
   }
   for (const store of Object.values(state.stores)) {
     if (store.ledger.cash < 0) {
@@ -35,6 +38,9 @@ function checkIntegrity(state: GameState, scenario: string): IntegrityViolation[
     }
     if (store.inventoryQuantity < 0) {
       violations.push({ scenario, message: `store ${store.id} has negative inventory: ${store.inventoryQuantity}` });
+    }
+    if (!Number.isInteger(store.inventoryQuantity)) {
+      violations.push({ scenario, message: `store ${store.id} has non-integer inventory: ${store.inventoryQuantity}` });
     }
   }
   for (const household of Object.values(state.households)) {
@@ -46,10 +52,16 @@ function checkIntegrity(state: GameState, scenario: string): IntegrityViolation[
     if (listing.quantityAvailable < 0) {
       violations.push({ scenario, message: `wholesale listing ${listing.id} has negative quantity` });
     }
+    if (!Number.isInteger(listing.quantityAvailable)) {
+      violations.push({ scenario, message: `wholesale listing ${listing.id} has non-integer quantity: ${listing.quantityAvailable}` });
+    }
   }
   for (const listing of state.retailListings) {
     if (listing.quantityAvailable < 0) {
       violations.push({ scenario, message: `retail listing ${listing.id} has negative quantity` });
+    }
+    if (!Number.isInteger(listing.quantityAvailable)) {
+      violations.push({ scenario, message: `retail listing ${listing.id} has non-integer quantity: ${listing.quantityAvailable}` });
     }
   }
 

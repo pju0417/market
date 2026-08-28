@@ -86,6 +86,42 @@ describe("GameSession (D-021: single human player)", () => {
     expect(session.isWaitingForHumanInput()).toBe(true);
   });
 
+  it("bumps getVersion() on every mutating call (submit*/advancePhase) — guardrail for useMemo([version, ...]) callers in the UI", async () => {
+    // src/ui/screens/{Company,Store,Household}TurnScreen.tsx memoize advisor output and eligible
+    // listings on `version` instead of `state` (GameState is mutated in place and never
+    // replaced, so its reference never changes — see docs/TODO.md's useMemo reference-identity
+    // note). That only works if every state-mutating entry point below bumps the version; if a
+    // future method forgets to call notify(), those memos would silently go stale.
+    const session = new GameSession(1);
+    let version = session.getVersion();
+
+    session.submitCompanyDecision({ quantity: 5, quality: 0.5, wholesalePrice: 8 });
+    expect(session.getVersion()).toBeGreaterThan(version);
+    version = session.getVersion();
+
+    await session.advancePhase(); // company-turn -> company-settlement
+    expect(session.getVersion()).toBeGreaterThan(version);
+    version = session.getVersion();
+
+    await session.advancePhase(true); // company-settlement -> wholesale-market-update
+    await session.advancePhase(true); // -> store-turn
+    expect(session.getState().currentPhase).toBe("store-turn");
+    version = session.getVersion();
+
+    session.submitStoreDecision({ purchases: [], retailPrice: 10 });
+    expect(session.getVersion()).toBeGreaterThan(version);
+    version = session.getVersion();
+
+    await session.advancePhase(); // store-turn -> store-settlement
+    await session.advancePhase(true); // -> retail-market-update
+    await session.advancePhase(true); // -> household-turn
+    expect(session.getState().currentPhase).toBe("household-turn");
+    version = session.getVersion();
+
+    session.submitHouseholdPurchases([]);
+    expect(session.getVersion()).toBeGreaterThan(version);
+  });
+
   it("notifies subscribers on submission and on phase advance", async () => {
     const session = new GameSession(1);
     let notifications = 0;

@@ -26,7 +26,7 @@ export function useGameSession(init: GameInit) {
   });
   const subscribe = useCallback((onChange: () => void) => session.subscribe(onChange), [session]);
   const getVersion = useCallback(() => session.getVersion(), [session]);
-  useSyncExternalStore(subscribe, getVersion);
+  const version = useSyncExternalStore(subscribe, getVersion);
 
-  return { session, state: session.getState() };
+  return { session, state: session.getState(), version };
 }

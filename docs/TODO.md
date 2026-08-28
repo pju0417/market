@@ -236,13 +236,42 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
       시뮬레이션 회귀 확인 불필요, 기존 249개 테스트 그대로 통과. 새 RTL/jsdom 컴포넌트
       테스트는 추가하지 않음(Milestone 2에서 이미 "저비용 대안만" 채택 확정). 이로써
       Milestone 3(규칙 기반 전략 비서: 기업/가게/가계 턴 + UI 연결)가 모두 완료됨.
-- [ ] (Milestone 4 진입 전 처리 권고) NPC 구매 우선순위 역전 수정 — 헤드리스 시뮬레이터의
-      학생 자동진행 구매(`decideHouseholdPurchases` 호출)에는 `ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS`를
-      적용하지 않도록 호출 경로 구분. 지금은 D-021(학생 1명) 조건에는 영향 없어 보류 중.
-- [ ] (별도 이슈, 이번 Milestone 3와 무관) 가게 매입 목표 수량이 전략 배율 때문에 정수가
-      아닌 경우가 발생(`src/npc/decisions.ts`의 `BASE_STORE_PURCHASE_QUANTITY`×`purchaseQuantityMultiplier`).
-      `Math.floor`/`Math.round` 적용 검토, `validate:economy`에 정수 검사 추가 검토.
-- [ ] (Milestone 4 진입 전 처리 권고, code-reviewer 지적) 비서 패널 `useMemo([state, ...])`의
+- [x] NPC 구매 우선순위 역전 수정 (D-025) — `decideHouseholdPurchases`(`src/npc/decisions.ts`)
+      내부에서 `household.kind === "npc"`일 때만 `ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS`를
+      적용하고 학생 소유(자동진행 포함)에는 0을 적용하도록 수정(시그니처 변경 불필요 —
+      `household-turn`/`npc-consumer-behavior`가 순회하는 household의 `kind`가 생성 시점부터
+      고정되어 있음을 확인해 활용). `tests/npc/decisions.test.ts`에 `kind==="student"`이면
+      가산점이 걸리지 않음을 결정론적으로 검증하는 테스트 추가. `typecheck`/`lint`/`test`(250개)/
+      `build` 통과, `validate:economy` 데이터 무결성 위반 0건. 실측(도매/소매 유통량 직접 계측):
+      NPC 가계 1명당 라운드 평균 식품 수령량이 5/10/20명 시나리오에서 각각 5.36→6.81,
+      0.24→2.21, 2.98→5.86으로 개선(역전 해소 확인). `householdEssentialCategoriesMissed`의
+      "food" 비율 자체는 10/20명에서 오히려 올라간 것처럼 보이는데, 이는 그 지표가 "매물이
+      전혀 없어 기회조차 없었던 경우"를 놓침으로 집계하지 않는 정의상 맹점 때문(수정 전엔
+      학생이 매 라운드 식품을 100% 소진해 NPC 차례엔 매물 자체가 없었으므로 0%로 보였을
+      뿐) — 상세 근거는 docs/DECISIONS.md D-025 참고. code-reviewer·economy-reviewer 모두
+      독립 재현으로 문제 없음 확인(economy-reviewer가 D-021엔 영향 없음도 논리적으로 검증).
+      economy-reviewer가 검토 중 별개 관찰 하나를 추가 발견: 만족도 페널티 게이팅
+      (`wasAvailable`)이 리포팅 지표뿐 아니라 페널티 공식 자체에도 같은 방식으로 적용되어
+      "만족도 공식이 같은 라운드 내 처리 순서에 좌우되는" 기존 특성이 있음(D-021엔 무관,
+      다인원 실제 플레이에서만 잠재 문제) — D-026(후보)로 기록, 이번엔 손대지 않고
+      Milestone 4 다인원 검증 단계로 이월(docs/DECISIONS.md 참고).
+- [x] (D-027) 가게 매입 목표 수량이 전략 배율 때문에 정수가 아닌 경우가 발생하던 데이터
+      무결성 버그 수정 — `decideStorePurchases`(`src/npc/decisions.ts`)의 `targetQuantity`
+      (premium 10.5/low-cost 19.5/aggressive 22.5)와 매입 확정 지점의 `quantity`에
+      `Math.floor` 적용(코드베이스 관례상 `Math.round`가 아닌 `Math.floor`). 방어적으로
+      `decideCompanyProduction`의 `neededQuantity`에도 동일 적용(현재 배율 조합은 사전 확인
+      결과 항상 정수라 수치 영향 없음, 향후 배율 변경 시 재발 방지용). `scripts/validate-economy.ts`
+      의 `checkIntegrity`에 기업/가게 재고, 도매/소매 매물 수량의 정수성 검사 추가.
+      `tests/npc/decisions.test.ts`에 premium/low-cost/aggressive(재고 0 포함)에서 반환
+      `quantity`가 항상 정수임을 검증하는 테스트 추가. 재검증: `typecheck`/`lint`/`test`
+      (253개)/`build` 통과. 수정 전 `validate:economy`(1/5/10/20명×시드 1/42/999)는 108건의
+      비정수 재고/매물 위반이 실제로 재현됨을 확인했고, 수정 후 0건(음수 검사·determinism
+      유지). `simulate:class`(seed 42) 재검증 결과 손익 변동 수 단위~20대, 생존 기업/가게
+      수 전 시나리오 무변화, 최대 시장점유율 변동 ±0.01~0.02 — D-025 때 관측된 정상 변동
+      범위와 부합해 뚜렷한 방향성 있는 이상 없음. 매입량 실측(재고 0·무제한 자금/공급
+      조건): low-cost 19.5→19(-2.6%), premium 10.5→10(-4.8%), aggressive 22.5→22(-2.2%)로
+      이론 예측(2~5%대 감소)과 일치. 상세 근거는 docs/DECISIONS.md D-027 참고.
+- [x] (Milestone 4 진입 전 처리 권고, code-reviewer 지적) 비서 패널 `useMemo([state, ...])`의
       참조 동일성 문제 — `GameState`는 절대 새 객체로 교체되지 않고 제자리에서 mutate되므로,
       `state` 자체를 의존성으로 쓰면 내용이 바뀌어도 React가 "안 바뀐 값"으로 취급해 재계산을
       건너뛸 수 있다. 지금은 각 턴 화면이 phase 진입마다 통째로 재마운트돼 우연히 문제가
@@ -250,10 +279,34 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
       기존 패턴). 동시 턴 멀티플레이(Milestone 4)에서 화면이 마운트된 채로 다른 참가자의
       턴 처리로 상태가 갱신되는 시나리오가 생기면 실제 버그가 될 수 있어, 그 전에
       `session.getVersion()`(원시값) 등으로 의존성을 바꾸는 재검토가 필요하다.
+      → 처리 완료: `useGameSession`(`src/ui/useGameSession.ts`)이 `useSyncExternalStore`가
+      반환하는 버전 숫자를 `version`으로 그대로 노출하도록 바꾸고, `App.tsx`가 이를
+      `CompanyTurnScreen`/`StoreTurnScreen`/`HouseholdTurnScreen`에 `version` prop으로
+      전달한다. 세 화면 모두 `state`(또는 `state.wholesaleListings`/`state.retailListings`
+      등 하위 필드)를 직접 넣던 `useMemo` 의존성 배열을 `[version, ...id]`로 바꿔
+      `session`의 버전 카운터로만 재계산 트리거를 판단하도록 했다(경제 로직·JSX·이벤트
+      핸들러는 변경 없음). `typecheck`(양쪽 tsconfig)/`lint --max-warnings=0`/`test`(253개)
+      /`build` 모두 통과. 이후 직접 브라우저로 재검증 완료: 기업 턴 생산량 변경 시
+      비용 실시간 갱신, 세 턴 화면 모두 비서 패널 정상 동작(1라운드 "지난 실적 없음" →
+      2라운드 "지난 라운드 실적과 시장 시세를 함께 참고"로 정확히 전환), 라운드 결과 확인,
+      새로고침 → `ResumePromptScreen` → "이어하기" 클릭 시 정확히 같은 지점(손익/거래량까지)
+      에서 재개, 2라운드까지 연속 진행 확인. 콘솔 에러 없음. `useGameSession`을 건드린
+      부분(재개 경로)까지 포함해 회귀 없음 확인 완료. code-reviewer 검토 결과 문제 없음(버전
+      카운터가 모든 상태 변경 경로에서 실제로 증가하는지, `useSyncExternalStore` 스냅샷 재사용이
+      concurrent 렌더링 안전성 측면에서 올바른지, 5곳 의존성 배열/eslint-disable 모두 확인).
+      권고에 따라 `tests/multiplayer/gameSession.test.ts`에 "모든 mutating 메서드(submit*/
+      advancePhase)가 `getVersion()`을 증가시킨다"는 핵심 불변식을 직접 검증하는 가드레일
+      테스트 1개 추가(향후 `notify()` 호출이 빠진 새 메서드가 추가돼도 즉시 잡아냄). 254개
+      전체 테스트 통과.
 
 ## Milestone 4 — 실제 멀티플레이
 
 [MULTIPLAYER_DESIGN.md](MULTIPLAYER_DESIGN.md)의 동시 턴 동기화 구현.
+
+- [ ] D-026(후보) 재검토 — 만족도 페널티(D-024)의 `wasAvailable` 게이팅이 같은 라운드 내
+      처리 순서에 좌우되는 문제. 다인원 실제 플레이가 열리면(여러 실제 학생이 같은
+      household-turn 안에서 경쟁) 순서상 늦은 학생이 부당하게 페널티를 면제/부과받을 수
+      있는지 실측 확인 필요. 상세는 docs/DECISIONS.md D-026 참고.
 
 ## Milestone 5 — Google Sheets / Apps Script Adapter
 

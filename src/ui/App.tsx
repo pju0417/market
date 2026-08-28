@@ -109,7 +109,7 @@ export function App() {
 }
 
 function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void }) {
-  const { session, state } = useGameSession(init);
+  const { session, state, version } = useGameSession(init);
   const player = session.getHumanPlayer();
   const gameOver = state.currentRound > state.config.totalRounds;
   const phase = state.currentPhase;
@@ -162,6 +162,7 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
           <CompanyTurnScreen
             session={session}
             state={state}
+            version={version}
             company={state.companies[player.companyId]!}
             onSubmitted={() => advance()}
             disabled={isAdvancing}
@@ -172,6 +173,7 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
           <StoreTurnScreen
             session={session}
             state={state}
+            version={version}
             store={state.stores[player.storeId]!}
             companies={state.companies}
             onSubmitted={() => advance()}
@@ -183,6 +185,7 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
           <HouseholdTurnScreen
             session={session}
             state={state}
+            version={version}
             household={state.households[player.householdId]!}
             stores={state.stores}
             onSubmitted={() => advance()}

@@ -108,6 +108,28 @@ describe("decideStorePurchases", () => {
     expect(decision.purchases.every((p) => p.listingId === "l-food")).toBe(true);
   });
 
+  it.each([
+    ["premium", 0.7],
+    ["low-cost", 1.3],
+    ["aggressive", 1.5],
+  ] as const)(
+    "always returns integer purchase quantities for strategy=%s (targetStockLevel=15*%s is fractional)",
+    (strategyId, _multiplier) => {
+      const listings: WholesaleListing[] = [
+        { id: "l-food", companyId: "co-a", categoryId: "food", quantityAvailable: 1000, quality: 0.5, price: 4 },
+      ];
+      const store = makeStore({ strategyId, specialtyCategoryId: "food", inventoryQuantity: 0 });
+      const rng = createRng(1);
+
+      const decision = decideStorePurchases(store, 10_000, listings, rng);
+
+      expect(decision.purchases.length).toBeGreaterThan(0);
+      for (const purchase of decision.purchases) {
+        expect(Number.isInteger(purchase.quantity)).toBe(true);
+      }
+    },
+  );
+
   it("buys less when unsold inventory is already high, even with ample cash (order-up-to policy)", () => {
     const listings: WholesaleListing[] = [
       { id: "l-food", companyId: "co-a", categoryId: "food", quantityAvailable: 1000, quality: 0.5, price: 4 },
@@ -150,8 +172,8 @@ describe("decideHouseholdPurchases", () => {
     expect(decision.purchases).toHaveLength(0);
   });
 
-  it("prioritizes food over apparel/electronics/toys when normalized price and quality are identical (D-024 priority bonus)", () => {
-    const household = makeHousehold();
+  it("prioritizes food over apparel/electronics/toys when normalized price and quality are identical (D-024 priority bonus, npc household)", () => {
+    const household = makeHousehold({ kind: "npc" });
     // Each category has a different CATEGORY_UNIT_COST reference price, so prices are scaled
     // per-category (unitCost * 2.2) to make the underlying price/quality score identical before
     // the essential-category priority bonus is applied — isolating the effect being tested.
@@ -171,8 +193,8 @@ describe("decideHouseholdPurchases", () => {
     expect(decision.purchases[0]!.listingId).toBe("r-food");
   });
 
-  it("does not let the priority bonus override an extreme price disadvantage", () => {
-    const household = makeHousehold();
+  it("does not let the priority bonus override an extreme price disadvantage (npc household)", () => {
+    const household = makeHousehold({ kind: "npc" });
     const listings: RetailListing[] = [
       { id: "r-food-expensive", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 1000 },
       { id: "r-toys-cheap", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
@@ -183,6 +205,38 @@ describe("decideHouseholdPurchases", () => {
 
     expect(decision.purchases.some((p) => p.listingId === "r-food-expensive")).toBe(false);
     expect(decision.purchases.some((p) => p.listingId === "r-toys-cheap")).toBe(true);
+  });
+
+  it("applies the priority bonus only for kind='npc', never for kind='student' (D-024 follow-up fix)", () => {
+    // stable preset => qualityWeight = 0.5. Both listings share quality 0.5, quantityAvailable 10.
+    // toys price is set exactly at its reference price (normalizedPrice = 1), giving a raw score
+    // (before any bonus) of 0.5*0.5 - 0.5*1 = -0.25.
+    // food price is set so normalizedPrice = 1.1, giving a raw score of 0.5*0.5 - 0.5*1.1 = -0.30
+    // — a deterministic 0.05 gap below toys that is larger than the max possible tie-break spread
+    // (rngRange(-0.01, 0.01) per candidate => at most 0.02 difference between two candidates), so
+    // without the bonus toys always wins. Adding the npc-only bonus (food: 0.15) flips food's
+    // score to -0.30 + 0.15 = -0.15, a 0.10 gap above toys that also exceeds the tie-break spread,
+    // so with the bonus food always wins. This isolates the household.kind branch deterministically
+    // instead of relying on `not.toBe` (which could pass by tie-break luck alone).
+    const foodReferencePrice = 4 * 2.2; // CATEGORY_UNIT_COST.food * REFERENCE_PRICE_MULTIPLIER
+    const toysReferencePrice = 8 * 2.2; // CATEGORY_UNIT_COST.toys * REFERENCE_PRICE_MULTIPLIER
+    const listings: RetailListing[] = [
+      { id: "r-food", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 1.1 * foodReferencePrice },
+      { id: "r-toys", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1.0 * toysReferencePrice },
+    ];
+
+    const npcHousehold = makeHousehold({ kind: "npc" });
+    const studentHousehold = makeHousehold({ kind: "student" });
+
+    // Ample cash: candidates are bought in descending score order, so the first purchase
+    // reveals the top-ranked listing directly (same technique as the "prioritizes food" test
+    // above) — with 1000 cash both listings would eventually be bought regardless of order,
+    // so checking `purchases[0]` rather than "some" is what actually isolates the ranking.
+    const npcDecision = decideHouseholdPurchases(npcHousehold, 1000, listings, createRng(3));
+    const studentDecision = decideHouseholdPurchases(studentHousehold, 1000, listings, createRng(3));
+
+    expect(npcDecision.purchases[0]!.listingId).toBe("r-food");
+    expect(studentDecision.purchases[0]!.listingId).toBe("r-toys");
   });
 });
 

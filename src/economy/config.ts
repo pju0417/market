@@ -187,8 +187,10 @@ export const ESSENTIAL_CATEGORY_SATISFACTION_PENALTY: Partial<Record<ProductCate
 };
 
 /**
- * NPC/자동 진행 가계 구매 알고리즘(scoreListingForBuyer)이 필수 카테고리 매물에 주는 가산점.
- * 만족도 페널티와 스케일이 다른 별도 체계지만 상대적 비율(2:1)은 맞췄다. v1 잠정값.
+ * 진짜 NPC 가계(household.kind === "npc") 구매 알고리즘(scoreListingForBuyer)에만 적용되는
+ * 필수 카테고리 매물 가산점(학생 소유 자동진행 가계에는 적용 안 함, docs/DECISIONS.md D-024
+ * 후속 수정 참고). 만족도 페널티와 스케일이 다른 별도 체계지만 상대적 비율(2:1)은 맞췄다.
+ * v1 잠정값.
  */
 export const ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS: Partial<Record<ProductCategoryId, number>> = {
   food: 0.15,

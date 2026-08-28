@@ -16,6 +16,7 @@ import { AdvisorPanel } from "./AdvisorPanel.js";
 interface Props {
   session: GameSession;
   state: GameState;
+  version: number;
   company: CompanyState;
   onSubmitted: () => void;
   /** phase 진행이 이미 실행 중일 때 true — 중복 제출을 막는다. */
@@ -23,7 +24,7 @@ interface Props {
 }
 
 /** 기업 턴: 생산량, 품질, 도매 판매가격을 정한다 (docs/GAME_RULES.md 1절). */
-export function CompanyTurnScreen({ session, state, company, onSubmitted, disabled = false }: Props) {
+export function CompanyTurnScreen({ session, state, version, company, onSubmitted, disabled = false }: Props) {
   const fixedCost = computeCompanyFixedCost(company.districtId);
   const availableCash = computeAvailableCash(company.ledger.cash, fixedCost);
   const unitCost = company.productCategoryId ? companyUnitCost(company.productCategoryId, company.districtId) : 0;
@@ -36,7 +37,8 @@ export function CompanyTurnScreen({ session, state, company, onSubmitted, disabl
 
   const productionCost = useMemo(() => computeProductionCost(quantity, unitCost), [quantity, unitCost]);
   const overBudget = isOverBudget(productionCost, availableCash);
-  const advice = useMemo(() => analyzeCompanyTurn(state, company.id), [state, company.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
+  const advice = useMemo(() => analyzeCompanyTurn(state, company.id), [version, company.id]);
 
   return (
     <>

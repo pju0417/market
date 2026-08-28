@@ -3,7 +3,10 @@
  * Simulator(Milestone 1)에서 사람 입력이 없는 "학생 소유" 참여자를 자동 진행시키는 데도
  * 재사용한다 — 사람 입력이 생기는 Milestone 2부터는 학생 소유 참여자에 한해 이 함수 대신
  * 실제 입력을 사용하도록 교체하면 된다. 순수 함수로 유지하고 Math.random()을 직접 쓰지
- * 않는다 (src/economy/rng.ts의 결정론적 Rng만 사용).
+ * 않는다 (src/economy/rng.ts의 결정론적 Rng만 사용). 단, 필수 카테고리 NPC 우선순위 가산점
+ * (essentialNpcPriorityBonus)은 진짜 NPC와 학생 자동진행을 구분해야 하므로 예외적으로
+ * decideHouseholdPurchases 내부에서 household.kind === "npc"일 때만 적용한다(D-024 후속 수정,
+ * 아래 scoreListingForBuyer 근처 JSDoc 참고).
  */
 import {
   CATEGORY_UNIT_COST,
@@ -58,7 +61,7 @@ export function decideCompanyProduction(
   // 생산한다. 재고를 보지 않고 매번 목표량을 그대로 생산하면 안 팔린 물량이 쌓이는 동안에도
   // 현금만 계속 소진되어 파산이 앞당겨진다 (docs/DECISIONS.md D-019에서 관찰됨).
   const targetStockLevel = BASE_PRODUCTION_QUANTITY * preset.quantityMultiplier;
-  const neededQuantity = Math.max(0, targetStockLevel - company.inventoryQuantity);
+  const neededQuantity = Math.floor(Math.max(0, targetStockLevel - company.inventoryQuantity));
   const affordableQuantity = Math.floor(Math.max(0, availableCash) / unitCost);
   const quantity = Math.max(0, Math.min(neededQuantity, affordableQuantity));
 
@@ -92,7 +95,7 @@ export function decideStorePurchases(
   const preset = STORE_STRATEGY_PRESETS[store.strategyId];
   // 기업과 같은 "적정 재고까지만 채운다" 정책 (docs/DECISIONS.md D-019).
   const targetStockLevel = BASE_STORE_PURCHASE_QUANTITY * preset.purchaseQuantityMultiplier;
-  const targetQuantity = Math.max(0, targetStockLevel - store.inventoryQuantity);
+  const targetQuantity = Math.floor(Math.max(0, targetStockLevel - store.inventoryQuantity));
 
   const candidates = eligibleListings
     .filter((listing) => listing.categoryId === store.specialtyCategoryId && listing.quantityAvailable > 0)
@@ -109,7 +112,7 @@ export function decideStorePurchases(
   for (const { listing } of candidates) {
     if (remainingTarget <= 0 || remainingCash <= 0) break;
     const affordable = Math.floor(remainingCash / listing.price);
-    const quantity = Math.max(0, Math.min(remainingTarget, listing.quantityAvailable, affordable));
+    const quantity = Math.floor(Math.max(0, Math.min(remainingTarget, listing.quantityAvailable, affordable)));
     if (quantity <= 0) continue;
     purchases.push({ listingId: listing.id, quantity, unitPrice: listing.price });
     remainingCash -= quantity * listing.price;
@@ -145,7 +148,7 @@ export function decideHouseholdPurchases(
         listing.categoryId,
         preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6),
         rng,
-        essentialNpcPriorityBonus(listing.categoryId),
+        household.kind === "npc" ? essentialNpcPriorityBonus(listing.categoryId) : 0,
       ),
     }))
     .sort((a, b) => b.score - a.score);
@@ -171,7 +174,8 @@ export function decideHouseholdPurchases(
  * 가격 대비 품질 점수. qualityWeight=1이면 품질만, 0이면 가격만 본다. 아주 작은 난수로 동점을
  * 깬다. priorityBonus는 "필수 소비" 카테고리(docs/DECISIONS.md D-024)에 가계 구매 알고리즘이
  * 주는 가산점이며, decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상
- * 기본값 0으로 호출된다.
+ * 기본값 0으로 호출된다. 이 가산점은 decideHouseholdPurchases에서 household.kind === "npc"일
+ * 때만 적용되며, 학생 소유 자동진행 가계에는 적용되지 않는다(D-024 후속 수정).
  */
 export function scoreListingForBuyer(
   price: number,

@@ -16,6 +16,7 @@ import { AdvisorPanel } from "./AdvisorPanel.js";
 interface Props {
   session: GameSession;
   state: GameState;
+  version: number;
   store: StoreState;
   companies: Record<ParticipantId, CompanyState>;
   onSubmitted: () => void;
@@ -23,7 +24,7 @@ interface Props {
 }
 
 /** 가게 턴: 도매시장에서 상품을 비교해 매입하고(D-004), 소매 판매가격을 정한다. */
-export function StoreTurnScreen({ session, state, store, companies, onSubmitted, disabled = false }: Props) {
+export function StoreTurnScreen({ session, state, version, store, companies, onSubmitted, disabled = false }: Props) {
   const fixedCost = computeStoreFixedCost(store.districtId);
   const availableCash = computeAvailableCash(store.ledger.cash, fixedCost);
 
@@ -33,7 +34,8 @@ export function StoreTurnScreen({ session, state, store, companies, onSubmitted,
         eligibleWholesaleListingsForStore(store, state.wholesaleListings, companies),
         store.specialtyCategoryId,
       ),
-    [store, state.wholesaleListings, companies],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
+    [version, store.id],
   );
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -42,7 +44,8 @@ export function StoreTurnScreen({ session, state, store, companies, onSubmitted,
 
   const totalCost = computeTotalCost(eligible, quantities);
   const overBudget = isOverBudget(totalCost, availableCash);
-  const advice = useMemo(() => analyzeStoreTurn(state, store.id), [state, store.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
+  const advice = useMemo(() => analyzeStoreTurn(state, store.id), [version, store.id]);
 
   return (
     <>
