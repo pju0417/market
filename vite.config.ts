@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { apiPlugin } from "./src/server/viteApiPlugin.js";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), apiPlugin()],
   resolve: {
     alias: {
       "@engine": "/src/engine",

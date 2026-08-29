@@ -138,6 +138,24 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
       `npm test`·`npm run build` 모두 통과. `npm run simulate:class`·`npm run validate:economy`는
       하드닝 적용 전후로 수치가 완전히 동일함을 직접 대조 확인(정상 경로에는 영향 없음).
 
+- [x] (사용자 요청, Milestone 4 진행 중 발견) 가계 턴 구매 입력창의 예산 초과 방지를
+      "제출 버튼 비활성화"에서 "입력 자체를 실시간으로 제한"으로 강화 — 기존에는 개별
+      `<input max=...>`가 그 매물 자신의 재고/전체 개수 한도만 반영해, 여러 매물에 나눠
+      담다가 총액이 예산을 넘으면 제출 버튼이 막힐 때까지는 초과 수량을 그대로 입력할 수
+      있었다(제출은 항상 막혔으므로 실제로 돈을 초과 지출한 적은 없음 — UX 문제였지 데이터
+      무결성 문제는 아니었음). `src/ui/turnCalculations.ts`에 순수 함수
+      `computeMaxPurchaseQuantity(listing, totalBudget, maxUnits, otherListingsCost, otherListingsUnits)`
+      신규 추가 — 재고, 개수 한도, "다른 매물에 이미 담은 금액/개수를 뺀 나머지 예산" 세
+      가지를 모두 반영한 최대 수량을 계산한다. `HouseholdTurnScreen`의 각 입력창이 이
+      값을 `max` 속성과 `onChange` 클램프 둘 다에 사용하도록 변경(다른 값을 직접 타이핑해도
+      `Math.min(입력값, maxQuantity)`로 즉시 잘림) — 경제 로직/제출 데이터 형식은 무변경,
+      기존 `overBudget`/`overUnits` 경고·제출 버튼 비활성화는 방어적 이중 장치로 그대로
+      유지. `computeMaxPurchaseQuantity` 단위 테스트 6개 추가(총 265개 통과),
+      `typecheck`/`lint`/`build` 클린. 브라우저에서 직접 확인: 한 매물에 담을수록 다른
+      매물들의 `max`가 실시간으로 줄어듦, 한도를 넘는 값을 타이핑해도 자동으로 한도까지만
+      잘림, 6개 한도까지 담아 제출 시 저축이 정확히 (용돈 100원 − 소비 64원 = 36원)으로
+      반영되어 실제 차감 금액에는 영향이 없음을 확인.
+
 남은 항목 (다음 반복): 현재 없음 — 새 항목이 생기면 여기에 추가한다.
 
 ## Milestone 3 — 규칙 기반 전략 비서 (완료)
@@ -362,12 +380,79 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
         스푸핑할 다른 학생 id 자체가 없어 실질적 위험은 0이지만, **2단계(로컬 폴링 서버)에서
         여러 기기/탭이 하나의 세션에 요청을 보내게 되면 참가자별 인증(세션 토큰 등) 계층이
         `GameSession` 앞에 반드시 있어야 한다** — 2단계 설계에 필수로 반영.
-- [ ] 2단계: 로컬 폴링 서버 (같은 기기/네트워크 안에서 여러 브라우저 탭·기기가 하나의
-      `GameSession`을 공유하도록 폴링 기반 동기화 — WebSocket 등은 이번 단계 범위 밖).
-      **설계에 반드시 포함**: 참가자별 인증(세션 토큰 등)을 `GameSession` 제출 API 앞에
-      추가해, 한 참가자가 다른 참가자의 companyId/storeId/householdId로 제출하는 것을
-      실제로 막아야 한다(1단계에서 economy-reviewer가 발견 — 지금은 id 소속 검증만 있고
-      호출자 본인 확인이 없음).
+- [x] **2단계: 로컬 폴링 서버** (같은 기기/네트워크 안에서 여러 브라우저 탭·기기가 하나의
+      `GameSession`을 공유하도록 폴링 기반 동기화 — WebSocket 등은 범위 밖). 사용자 확정
+      선택지: (1) 서버 진입점은 standalone Node 서버가 아니라 Vite 플러그인
+      (`configureServer`/`configurePreviewServer`)으로 `/api`에 마운트, (2) 세션 레지스트리는
+      여러 세션을 동시에 들 수 있는 `Map` 기반, (3) 이번 범위는 서버 계층 + 자동화 통합
+      테스트까지만이고 `CompanyTurnScreen`/`StoreTurnScreen`/`HouseholdTurnScreen`의 제출
+      호출부를 실제 네트워크 호출로 바꾸는 건 4단계(다인원 로비)로 이월, (4) `join` 시
+      참가자별 토큰 발급(loose join — 재join해도 매번 새 토큰, 기존 토큰 무효화 없음),
+      매 제출에 `Authorization: Bearer <token>` + 토큰이 바인딩된 id와 요청 본문의 id가
+      둘 다 일치해야 통과(다른 참가자 명의 제출 시 401/403) — "같은 교실 반신뢰 환경 오남용
+      방지" 수준이지 프로덕션 보안은 아님.
+      - D-028에서 이미 정한 포지셔닝대로, `httpApi.ts`의 요청 처리 로직을 Node의 raw
+        request/response와 완전히 분리된 순수 함수 `handleApiRequest(ApiRequest) =>
+        Promise<ApiResponse>`로 구현해, 나중에 Google Apps Script `doPost` 어댑터로 갈아끼울
+        수 있게 격리했다(`nodeAdapter.ts`가 유일한 Node 전용 어댑터).
+      - 신규 파일: `src/server/tokenStore.ts`(세션별 토큰 발급/조회, `crypto.randomUUID()`,
+        새 의존성 없음), `src/server/sessionRegistry.ts`(`Map<sessionId, {session, tokens}>`,
+        `createSession(studentCount, rngSeed?)`/`getSession(sessionId)`), `src/server/httpApi.ts`
+        (순수 함수, 라우팅 7개: `POST /api/sessions`, `GET .../slots`, `POST .../join`,
+        `GET .../state?since=N`, `POST .../submit/{company,store,household}`),
+        `src/server/nodeAdapter.ts`(JSON body 스트림 읽기 + URL 파싱만 담당하는 얇은
+        `http.RequestListener` 어댑터), `src/server/viteApiPlugin.ts`(위 어댑터를
+        `configureServer`/`configurePreviewServer`로 `/api`에 마운트 — connect의 경로 마운트가
+        `req.url`을 잘라버리는 것을 피하려고 `server.middlewares.use(path, ...)` 대신 매
+        요청마다 `req.url.startsWith("/api")`를 직접 검사하는 미들웨어 사용). `vite.config.ts`에
+        `apiPlugin()` 등록.
+      - `src/multiplayer/GameSession.ts`에 `advanceUntilInputRequired(force = false):
+        Promise<void>` 메서드만 추가(기존 메서드는 시그니처·동작 전혀 무변경) —
+        `!isGameOver() && !isWaitingForHumanInput()`인 동안 `advancePhase()`를 반복 호출해
+        사람 입력이 필요 없는 phase를 서버가 클라이언트 없이도 끝까지 드레인하게 한다.
+        `App.tsx`의 `SILENT_AUTO_PHASES`와 정책은 같지만 그 UI 이펙트 경로는 전혀 건드리지
+        않았다. `submit/*`가 성공하면 `httpApi.ts`가 자동으로 `advanceUntilInputRequired(false)`를
+        호출한다 — `force=true`를 노출하는 공개 엔드포인트는 이번 단계에 없음(3단계 범위).
+      - 담합 방지 원칙 검증: `GET /state`는 `getState()` + `getVersion()` +
+        `getUnsubmittedParticipantIds()`만 반환하므로 제출 대기 중인 내용은 응답 어디에도
+        실리지 않는다(`GameState`에는 애초에 미확정 제출값이 없음, phase가 실제로 실행된
+        뒤의 확정 상태만 담김) — 회귀 테스트로 A가 제출한 직후 B가 폴링한 응답 전체를
+        `JSON.stringify`해 A가 제출한 수량/가격 리터럴이 전혀 등장하지 않음을 고정.
+      - 검증: `tests/server/httpApi.test.ts` 13개(서버 없이 `handleApiRequest` 직접 호출 —
+        세션 생성/조회 실패/slots/join(loose join 포함)/토큰 없는 제출 401/다른 참가자
+        명의 제출 403/잘못된 입력 400/`since` 폴링/담합 방지/`advanceUntilInputRequired`
+        자동 드레인), `tests/server/integration.test.ts` 2개(`http.createServer(nodeAdapter(...))
+        .listen(0)` + Node 전역 `fetch`로 실제 TCP 왕복 — studentCount=2 세션에서 두 가상
+        학생이 각자 join → 스푸핑 제출 거부(403) 확인 → 자기 제출 → 폴링 버전 증가 확인 →
+        양쪽 제출 후 실제로 phase가 store-turn으로 넘어감 확인 → store/household 턴까지
+        진행해 라운드 1이 실제로 정산되고(`roundMetrics.length===1`) 라운드 2 company-turn까지
+        automatically 드레인됨을 확인, 두 번째 테스트는 토큰 없는 제출 401 + 없는 세션 404).
+        전체 테스트 280개(기존 265개 + 신규 15개) 통과, `npm run typecheck`(양쪽 tsconfig)·
+        `npm run lint -- --max-warnings=0`·`npm run build` 모두 클린. `tsconfig.ui.json`
+        그래프(`vite.config.ts` → `viteApiPlugin.ts` → `nodeAdapter.ts` → `httpApi.ts` →
+        `tokenStore.ts`/`sessionRegistry.ts`까지 전부 transitively 포함됨, TS는 "include"와
+        무관하게 import 그래프 전체를 체크하기 때문)에서도 타입 충돌 없음을 실제 확인 —
+        `npm run build` 산출물은 65 모듈로 기존과 동일해 서버 코드가 클라이언트 번들에
+        섞여 들어가지 않았음도 확인. 추가로 `npx vite`를 백그라운드로 직접 띄워
+        `curl`로 `/api/sessions`(201)·`/api/sessions/:id/slots`(200)·존재하지 않는
+        세션(404)·`/`(정적 페이지, 200)을 실제로 호출해 Vite 플러그인 마운트 자체가
+        실동작함을 수동으로도 확인했다. `src/engine`/`src/economy`/`src/npc`/`src/advisor`는
+        전혀 건드리지 않음.
+      - code-reviewer 재검증(직접 명령 실행 + git diff로 확인, 눈으로만 안 봄): 위 4개 명령
+        모두 재실행해 통과 확인, `GameSession.ts`/`src/engine`·`src/economy`·`src/npc`·
+        `src/advisor` 무변경을 `git diff`로 직접 재확인. 인증 우회 경로(타입 강제변환, 대소문자
+        비교 등) 없음, 담합 방지 테스트가 실제로 응답 본문을 `JSON.stringify`해 제출값 문자열이
+        없는지 확인하는 실질적 검증임을 확인. blocking 이슈 없음. 관찰 2건(둘 다 이번 범위에서
+        고치지 않음): (1) `POST /join`은 `playerId`만 알면 토큰을 받을 수 있고 `GET /slots`가
+        인증 없이 모든 `playerId`를 노출하므로, "다른 참가자 명의로 제출"은 막아도 "아예 그
+        참가자를 사칭해서 join"까지는 못 막는다 — D-028에서 이미 합의한 "같은 교실 반신뢰
+        환경" 전제와 일치하는 설계상 선택이라 버그 아님. (2) `sessionRegistry`의 세션 Map에
+        만료/정리 로직이 없어 프로세스가 오래 떠 있으면 계속 쌓인다 — 지금 규모(교실 프로토타입,
+        프로세스 수명이 짧음)에선 문제 아니고, 나중에(예: 3단계 이후 장시간 운영) 재검토
+        대상으로만 기록. 사소한 관찰 1건 추가: `handleSubmit`에서 제출 자체는 성공했는데 직후
+        자동 드레인(`advanceUntilInputRequired`) 중 예외가 나면 클라이언트에 일반 500이
+        내려간다(데이터 손실은 없음 — 제출은 이미 반영된 뒤라, UX상 에러 메시지가 다소
+        불친절할 수 있다는 진단 편의성 관찰일 뿐).
 - [ ] 3단계: 제출 타임아웃, "누가 아직 제출 안 했는지" 보여주는 UI, 담합 방지(제출 마감
       전까지 다른 참가자의 제출 내용을 노출하지 않는 것은 이미 지키고 있음 — 이 단계는 그
       원칙이 실제 여러 기기 환경에서도 깨지지 않는지 확인하고 타임아웃 정책을 추가하는 것).

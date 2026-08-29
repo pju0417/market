@@ -64,3 +64,54 @@
 진짜 네트워크 동기화(여러 기기, 여러 학생이 동시에 접속)와 "제출 안 한 참가자 목록" 같은
 다인원 모니터링 UI, 다인원 창업 준비(로비)는 여전히 Milestone 4의 다음 단계(2~4단계,
 docs/TODO.md 참고) 범위다.
+
+## 구현 상태 (Milestone 4 2단계)
+
+`src/server/`에 "여러 기기/탭이 하나의 `GameSession`을 공유"하는 첫 실제 네트워크 계층이
+생겼다 — HTTP 폴링 기반이며 WebSocket 등 실시간 푸시는 쓰지 않는다. D-028에서 확정한 대로
+이 서버는 로컬 전용 임시 기능이 아니라 **Google Apps Script Web App으로 포팅될 프로토타입**
+으로 설계했다: 실제 라우팅/인증/게임 진행 로직(`src/server/httpApi.ts`)은 Node의 raw
+request/response 타입을 전혀 참조하지 않는 순수 함수 `handleApiRequest(ApiRequest) =>
+Promise<ApiResponse>`이고, Node 전용 배관(JSON body 스트림 읽기, URL 파싱, 실제
+`http.RequestListener`로 감싸기)은 `src/server/nodeAdapter.ts` 한 파일에만 몰아넣었다.
+서버 진입점은 standalone Node 프로세스가 아니라 Vite 플러그인
+(`src/server/viteApiPlugin.ts`, `configureServer`/`configurePreviewServer`)으로 `/api`를
+마운트하는 방식을 택했다 — 이미 `npm run dev`/`npm run preview`로 띄우는 서버가 있으므로
+별도 서버 프로세스를 늘리지 않는다.
+
+**세션 레지스트리**(`src/server/sessionRegistry.ts`)는 `Map<sessionId, {session, tokens}>`
+로 여러 `GameSession`을 동시에 들 수 있게 설계했다 — 교사 1명당 세션 1개로 좁힐지 여러
+학급을 동시 지원할지는 아직 정하지 않았지만, Map 방식은 구현 비용이 거의 없고 나중에
+단일 세션으로 좁히기도 쉽다.
+
+**참가자 인증**(`src/server/tokenStore.ts`)은 Milestone 4 1단계에서 economy-reviewer가
+지적한 "id 소속 검증만 있고 호출자 본인 확인이 없다"는 위협을 실제로 막는다 — `join` 시
+참가자별 토큰을 발급하고(loose join: 같은 playerId로 재join해도 매번 새 토큰, 기존 토큰
+무효화 없음 — 여러 탭/새로고침 허용), 매 제출 요청은 `Authorization: Bearer <token>`을
+싣고, 서버가 "토큰이 바인딩된 playerId가 소유한 companyId/storeId/householdId"와 "요청
+본문의 id"가 일치하는지 검증한다(불일치·토큰 없음 시 401/403). **이건 "같은 교실 반신뢰
+환경에서 실수/장난 방지" 수준이며 TLS·토큰 만료/rotate 같은 프로덕션급 보안은 범위 밖이다.**
+
+**담합 방지 원칙(위 3번)이 실제 응답 형태에서도 지켜지는지 자동화 테스트로 고정**했다 —
+`GET /api/sessions/:id/state`는 `session.getState()` + `getVersion()` +
+`getUnsubmittedParticipantIds()`만 반환한다. `GameState`는 애초에 phase가 실제로 실행된
+뒤의 확정 상태만 담고(제출 대기 중인 값은 `GameSession` 내부 `Map`에만 버퍼링, Milestone 2
+때부터 있던 성질), `getUnsubmittedParticipantIds()`도 "누가 아직 제출 안 했는지" id만
+드러낼 뿐 내용은 노출하지 않는다 — 회귀 테스트(`tests/server/httpApi.test.ts`,
+`tests/server/integration.test.ts`)로 "A가 제출한 직후 B가 폴링한 응답을 통째로
+`JSON.stringify`해도 A가 제출한 수량/가격이 전혀 등장하지 않음"을 고정했다.
+
+각 `submit/*`가 성공하면 서버가 자동으로 `GameSession.advanceUntilInputRequired(false)`를
+호출해, 사람 입력이 필요 없는 phase(정산/시장 갱신 등)를 클라이언트 없이 조용히 끝까지
+드레인한다 — `src/ui/App.tsx`의 `SILENT_AUTO_PHASES` 자동 진행과 정책은 같지만, 그 UI
+이펙트 경로 자체는 이번 단계에서 전혀 건드리지 않았다(여전히 로컬 1인 세션만 그린다).
+`force=true`를 노출하는 공개 엔드포인트는 만들지 않았다(제출 타임아웃 정책은 3단계 범위).
+
+검증은 두 층위로 했다: (1) 서버를 띄우지 않고 `handleApiRequest`를 직접 호출하는 유닛
+테스트 13개, (2) `http.createServer(nodeAdapter(...)).listen(0)` + Node 18+ 전역 `fetch`로
+실제 TCP를 거쳐 두 "가상 학생" 클라이언트가 join → 제출(스푸핑 시도 거부 확인 포함) →
+폴링 → 양쪽 제출 후 실제 phase 전환 확인 → store/household 턴까지 진행해 라운드 1이 실제로
+정산되는 것까지 확인하는 통합 테스트 2개. 세 턴 화면(`CompanyTurnScreen` 등)의 제출 호출부를
+실제 네트워크 호출로 바꾸는 작업(async 전환, 원격 세션을 구독하는 클라이언트 훅)은 의도적으로
+이번 범위에 넣지 않았다 — 4단계(다인원 로비)와 함께 다룬다. 상세 검증 수치는
+docs/TODO.md Milestone 4 2단계 항목, 로드맵 결정 배경은 docs/DECISIONS.md D-028 참고.

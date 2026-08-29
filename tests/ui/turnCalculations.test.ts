@@ -4,6 +4,7 @@ import {
   computeCompanyFixedCost,
   computeHouseholdTotalBudget,
   computeMaxAffordable,
+  computeMaxPurchaseQuantity,
   computeProductionCost,
   computeStoreFixedCost,
   computeTotalCost,
@@ -122,6 +123,36 @@ describe("turnCalculations", () => {
 
     it("is 0 for empty record", () => {
       expect(sumQuantities({})).toBe(0);
+    });
+  });
+
+  describe("computeMaxPurchaseQuantity", () => {
+    const listing = { id: "r1", price: 10, quantityAvailable: 20 };
+
+    it("is capped by remaining cash after other listings' cost", () => {
+      // totalBudget=100, 이미 다른 항목에 70원을 담았으면 남은 30원으로 3개까지만 가능
+      expect(computeMaxPurchaseQuantity(listing, 100, 999, 70, 0)).toBe(3);
+    });
+
+    it("is capped by remaining unit budget after other listings' units", () => {
+      // maxUnits=10, 이미 다른 항목에 8개를 담았으면 2개까지만 가능(예산은 충분)
+      expect(computeMaxPurchaseQuantity(listing, 1000, 10, 0, 8)).toBe(2);
+    });
+
+    it("is capped by stock even when budget and unit limit both allow more", () => {
+      expect(computeMaxPurchaseQuantity(listing, 1000, 999, 0, 0)).toBe(20);
+    });
+
+    it("is 0 when other listings already consumed the entire budget", () => {
+      expect(computeMaxPurchaseQuantity(listing, 100, 999, 100, 0)).toBe(0);
+    });
+
+    it("is 0 when other listings already consumed the entire unit budget", () => {
+      expect(computeMaxPurchaseQuantity(listing, 1000, 5, 0, 5)).toBe(0);
+    });
+
+    it("never goes negative when other listings' totals exceed the budget/limit", () => {
+      expect(computeMaxPurchaseQuantity(listing, 100, 5, 150, 8)).toBe(0);
     });
   });
 

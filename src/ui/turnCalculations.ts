@@ -39,6 +39,29 @@ export function sumQuantities(quantities: Record<string, number>): number {
   return Object.values(quantities).reduce((sum, q) => sum + q, 0);
 }
 
+/** 수량 제한 계산에 필요한 최소 필드. */
+export interface QuantityLimitedListing extends CostableListing {
+  quantityAvailable: number;
+}
+
+/**
+ * 가계가 이 매물 하나에 지금 담을 수 있는 최대 수량. 재고, 라운드 전체 구매 개수 한도뿐
+ * 아니라 "이미 다른 매물에 담아둔 금액/개수"까지 제외한 나머지로 계산한다 — 즉 다른 항목에
+ * 먼저 담을수록 이 항목의 최대치가 실시간으로 줄어들어, 애초에 예산을 넘는 수량을 입력창에
+ * 넣을 수 없게 한다.
+ */
+export function computeMaxPurchaseQuantity(
+  listing: QuantityLimitedListing,
+  totalBudget: number,
+  maxUnits: number,
+  otherListingsCost: number,
+  otherListingsUnits: number,
+): number {
+  const remainingCash = Math.max(0, totalBudget - otherListingsCost);
+  const remainingUnits = Math.max(0, maxUnits - otherListingsUnits);
+  return Math.max(0, Math.min(listing.quantityAvailable, remainingUnits, computeMaxAffordable(remainingCash, listing.price)));
+}
+
 /**
  * 자기 거래 금지 필터(eligibleWholesaleListingsForStore)를 통과한 매물 중, 가게가 실제로
  * 화면에 표시하고 매입할 수 있는 것만 추린다 — 전문 업종과 일치하고 재고가 남아있어야 한다.

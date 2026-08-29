@@ -293,6 +293,23 @@ export class GameSession {
     return this.advancingPromise;
   }
 
+  /**
+   * 사람 입력이 필요 없는 phase를 자동으로 끝까지 진행한다(Milestone 4 2단계: 로컬 폴링
+   * 서버가 클라이언트 없이 조용한 phase를 드레인하기 위한 것 — `src/ui/App.tsx`의
+   * `SILENT_AUTO_PHASES` 정책과 같은 결과를 만들지만, 그 UI 이펙트 경로는 이 메서드를 쓰지
+   * 않고 그대로 둔다). 현재 phase가 사람 입력을 기다리는 중이면(`isWaitingForHumanInput()`)
+   * 아무것도 하지 않고 즉시 반환한다 — `force`는 그 다음부터 만나는 phase에마다 적용된다.
+   */
+  async advanceUntilInputRequired(force = false): Promise<void> {
+    while (!this.isGameOver() && !this.isWaitingForHumanInput()) {
+      await this.advancePhase(force);
+    }
+  }
+
+  private isGameOver(): boolean {
+    return this.state.currentRound > this.state.config.totalRounds;
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {

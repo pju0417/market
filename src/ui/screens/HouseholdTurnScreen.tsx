@@ -7,6 +7,7 @@ import type { GameState, HouseholdState, ParticipantId, StoreState } from "../..
 import { CATEGORY_LABELS, formatWon } from "../labels.js";
 import {
   computeHouseholdTotalBudget,
+  computeMaxPurchaseQuantity,
   computeTotalCost,
   filterEligibleRetailListings,
   isOverBudget,
@@ -62,23 +63,36 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
 
       <h3>가게 매대</h3>
       {eligible.length === 0 && <p className="empty-note">지금 살 수 있는 물건이 없어요.</p>}
-      {eligible.map((listing) => (
-        <div className="listing-row" key={listing.id}>
-          <div className="listing-info">
-            {CATEGORY_LABELS[listing.categoryId]} · {formatWon(listing.price)} / 개 · 품질{" "}
-            {(listing.quality * 100).toFixed(0)}점 · 최대 {Math.floor(listing.quantityAvailable)}개
+      {eligible.map((listing) => {
+        const currentQuantity = quantities[listing.id] ?? 0;
+        const otherListingsCost = totalCost - currentQuantity * listing.price;
+        const otherListingsUnits = totalUnits - currentQuantity;
+        const maxQuantity = computeMaxPurchaseQuantity(
+          listing,
+          totalBudget,
+          MAX_HOUSEHOLD_PURCHASE_UNITS,
+          otherListingsCost,
+          otherListingsUnits,
+        );
+        return (
+          <div className="listing-row" key={listing.id}>
+            <div className="listing-info">
+              {CATEGORY_LABELS[listing.categoryId]} · {formatWon(listing.price)} / 개 · 품질{" "}
+              {(listing.quality * 100).toFixed(0)}점 · 최대 {Math.floor(listing.quantityAvailable)}개
+            </div>
+            <input
+              type="number"
+              min={0}
+              max={maxQuantity}
+              value={currentQuantity}
+              onChange={(e) => {
+                const requested = Math.max(0, Number(e.target.value));
+                setQuantities((prev) => ({ ...prev, [listing.id]: Math.min(requested, maxQuantity) }));
+              }}
+            />
           </div>
-          <input
-            type="number"
-            min={0}
-            max={Math.min(listing.quantityAvailable, MAX_HOUSEHOLD_PURCHASE_UNITS)}
-            value={quantities[listing.id] ?? 0}
-            onChange={(e) =>
-              setQuantities((prev) => ({ ...prev, [listing.id]: Math.max(0, Number(e.target.value)) }))
-            }
-          />
-        </div>
-      ))}
+        );
+      })}
 
       <div className="stat-row">
         <span className="label">이번 소비 총액 ({totalUnits}/{MAX_HOUSEHOLD_PURCHASE_UNITS}개)</span>
