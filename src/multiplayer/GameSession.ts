@@ -46,7 +46,12 @@ export interface StepOutcome {
 }
 
 /** 사람 입력이 필요한 phase에서, 아직 제출하지 않았는지 여부. */
-const PHASES_REQUIRING_HUMAN_INPUT: readonly RoundPhase[] = ["company-turn", "store-turn", "household-turn"];
+const PHASES_REQUIRING_HUMAN_INPUT: readonly RoundPhase[] = [
+  "company-turn",
+  "store-turn",
+  "household-turn",
+  "round-result",
+];
 
 /** `StorageAdapter`에 저장할 때 쓰는 키. UI가 재사용할 수 있도록 export한다. */
 export const SAVED_SESSION_STORAGE_KEY = "economy-game:session-v1";
@@ -74,6 +79,9 @@ export class GameSession {
   private readonly pendingCompanyInputs = new Map<ParticipantId, CompanyDecisionInput>();
   private readonly pendingStoreRequests = new Map<ParticipantId, StoreDecisionInput>();
   private readonly pendingHouseholdRequests = new Map<ParticipantId, PurchaseRequestLine[]>();
+  /** round-result phase에서 각 학생이 결과를 확인(ack)했는지 (D-030: 라운드 결과만은
+   * 전원이 확인해야 다음 라운드로 진행하는 국지적 예외). */
+  private readonly acknowledgedRoundResultPlayerIds = new Set<ParticipantId>();
   private readonly listeners = new Set<() => void>();
   private version = 0;
   private advancingPromise: Promise<StepOutcome> | undefined;
@@ -113,13 +121,7 @@ export class GameSession {
     }
 
     if (setupChoices && !resumeState && this.humanPlayers.length === 1) {
-      const player = this.humanPlayers[0]!;
-      const company = this.state.companies[player.companyId]!;
-      company.districtId = setupChoices.companyDistrictId;
-      company.productCategoryId = setupChoices.companyCategoryId;
-      const store = this.state.stores[player.storeId]!;
-      store.districtId = setupChoices.storeDistrictId;
-      store.specialtyCategoryId = setupChoices.storeCategoryId;
+      this.applyBusinessSetupChoices(this.humanPlayers[0]!.id, setupChoices);
     }
 
     const decisionSource: HumanDecisionSource = {
@@ -159,8 +161,48 @@ export class GameSession {
     await storage.delete(SAVED_SESSION_STORAGE_KEY);
   }
 
+  /**
+   * `playerId`가 조종하는 회사/가게의 창업 준비(상권/업종)를 적용한다 (Milestone 4 4단계:
+   * 다인원 로비). 생성자의 단일 플레이어 전용 로직을 임의의 학생 1명 단위로 일반화한 것 —
+   * 라운드 1의 기업 턴이 아직 실행되지 않았을 때만 허용한다(그 이후에는 창업 준비를 바꿀
+   * 자연스러운 이유가 없고, 이미 진행 중인 라운드의 배정을 뒤늦게 바꾸면 그 라운드의 다른
+   * 결정과 정합이 깨진다).
+   */
+  applyBusinessSetupChoices(playerId: ParticipantId, choices: BusinessSetupChoices): void {
+    if (!(this.state.currentRound === 1 && this.state.currentPhase === "company-turn")) {
+      throw new Error(
+        "Business setup choices can only be applied before round 1's company-turn has been executed",
+      );
+    }
+    const player = this.humanPlayers.find((p) => p.id === playerId);
+    if (!player) {
+      throw new Error(`Unknown or non-human playerId "${playerId}"`);
+    }
+    const company = this.state.companies[player.companyId]!;
+    company.districtId = choices.companyDistrictId;
+    company.productCategoryId = choices.companyCategoryId;
+    const store = this.state.stores[player.storeId]!;
+    store.districtId = choices.storeDistrictId;
+    store.specialtyCategoryId = choices.storeCategoryId;
+    this.notify();
+  }
+
   getState(): Readonly<GameState> {
     return this.state;
+  }
+
+  /**
+   * 게임 상태 자체는 안 바뀌었지만 구독자에게 "뭔가 바뀌었다"고 알려야 할 때 쓴다
+   * (Milestone 4 4단계, code-reviewer 발견 버그 수정). 다인원 로비(창업 준비) 상태는
+   * `GameSession` 바깥의 서버 레지스트리(`src/server/sessionRegistry.ts`)에 있어 이 버전
+   * 카운터에 자동으로 반영되지 않는다 — 교사가 "로비 지금 닫기"를 누르거나 로비가 시간초과로
+   * 조용히 닫히면, `GameSession`은 전혀 안 바뀌었으므로 `notify()`가 저절로 불릴 일이 없다.
+   * `?since=버전` 폴링이 그 시점을 놓치면, 아직 창업 준비를 못 낸 학생은 "로비가 닫혔다"는
+   * 사실을 영원히 못 보고 대기 화면에 멈추게 된다 — 서버가 그런 지점에서 이 메서드를 호출해
+   * 폴링 클라이언트에게 "다시 조회해라"고 알린다.
+   */
+  bumpVersion(): void {
+    this.notify();
   }
 
   /**
@@ -214,6 +256,8 @@ export class GameSession {
         return this.humanPlayers.map((p) => p.storeId).filter((id) => !this.pendingStoreRequests.has(id));
       case "household-turn":
         return this.humanPlayers.map((p) => p.householdId).filter((id) => !this.pendingHouseholdRequests.has(id));
+      case "round-result":
+        return this.humanPlayers.map((p) => p.id).filter((id) => !this.acknowledgedRoundResultPlayerIds.has(id));
       default:
         return [];
     }
@@ -243,6 +287,19 @@ export class GameSession {
       throw new Error(`Unknown or non-human householdId "${householdId}"`);
     }
     this.pendingHouseholdRequests.set(householdId, lines);
+    this.notify();
+  }
+
+  /**
+   * round-result phase에서 이 학생이 결과를 확인했음을 표시한다 (D-030). 결정값을 담는
+   * 다른 `submit*` 메서드와 달리 값 없이 "확인함" 여부만 기록한다.
+   */
+  acknowledgeRoundResult(playerId: ParticipantId): void {
+    this.assertPhase("round-result");
+    if (!this.humanPlayers.some((p) => p.id === playerId)) {
+      throw new Error(`Unknown or non-human playerId "${playerId}"`);
+    }
+    this.acknowledgedRoundResultPlayerIds.add(playerId);
     this.notify();
   }
 
@@ -280,6 +337,7 @@ export class GameSession {
       this.pendingCompanyInputs.clear();
       this.pendingStoreRequests.clear();
       this.pendingHouseholdRequests.clear();
+      this.acknowledgedRoundResultPlayerIds.clear();
       this.advancingPromise = undefined;
       this.notify();
       await this.persist();

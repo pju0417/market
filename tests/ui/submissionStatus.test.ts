@@ -28,12 +28,17 @@ describe("computeUnsubmittedParticipants (Milestone 4 3단계, pure function, no
     expect(computeUnsubmittedParticipants(slots, [], "company-turn")).toEqual([]);
   });
 
-  it("returns an empty list for phases that don't require human input (settlement/market-update/etc.)", () => {
-    // Even if unsubmittedParticipantIds were non-empty (it shouldn't be, but defensively),
-    // phases outside {company-turn, store-turn, household-turn} never map to a participant field.
+  it("returns an empty list for phases with no participant field mapping", () => {
+    // For settlement/market-update phases, unsubmittedParticipantIds is genuinely always empty
+    // (no human input is ever required), so the defensive non-empty input below can't happen in
+    // practice.
     expect(computeUnsubmittedParticipants(slots, ["student-1-company"], "company-settlement")).toEqual([]);
     expect(computeUnsubmittedParticipants(slots, [], "wholesale-market-update")).toEqual([]);
-    expect(computeUnsubmittedParticipants(slots, [], "round-result")).toEqual([]);
+  });
+
+  it("maps unsubmitted PlayerState.id values back to their player slots during round-result (Milestone 4 4-b, D-030)", () => {
+    const result = computeUnsubmittedParticipants(slots, ["student-1"], "round-result");
+    expect(result).toEqual([{ playerId: "student-1", displayName: "학생 1", participantId: "student-1" }]);
   });
 
   it("ignores participant ids that don't match any known slot (defensive, should not crash)", () => {

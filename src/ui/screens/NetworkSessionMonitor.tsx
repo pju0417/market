@@ -138,7 +138,13 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
                 ? "전원 제출 완료"
                 : `미제출 ${unsubmitted.length}명 (${unsubmitted.map((p) => p.displayName).join(", ")})`}
           </p>
-          {teacherToken && !stateResult.gameOver && (
+          {!stateResult.gameOver && stateResult.lobby.open && (
+            <p className="empty-note">
+              로비가 아직 열려있어요 — "지금 진행"은 로비가 닫힌 뒤에 쓸 수 있어요. 서두르려면
+              교사 화면의 "로비 지금 닫기"를 먼저 눌러주세요.
+            </p>
+          )}
+          {teacherToken && !stateResult.gameOver && !stateResult.lobby.open && (
             <button className="secondary" onClick={() => void handleForceAdvance()}>
               지금 진행
             </button>

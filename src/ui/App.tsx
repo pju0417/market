@@ -1,18 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BusinessSetupChoices } from "../multiplayer/GameSession.js";
 import { GameSession } from "../multiplayer/GameSession.js";
 import { LocalStorageAdapter } from "../storage/LocalStorageAdapter.js";
 import type { GameState, RoundPhase } from "../types/domain.js";
 import "./App.css";
 import { PHASE_LABELS } from "./labels.js";
+import type { PlayerSlot } from "./network/sessionClient.js";
+import { SessionClient } from "./network/sessionClient.js";
 import { CompanyTurnScreen } from "./screens/CompanyTurnScreen.js";
 import { GameOverScreen } from "./screens/GameOverScreen.js";
 import { HouseholdTurnScreen } from "./screens/HouseholdTurnScreen.js";
+import { NetworkGameScreen } from "./screens/NetworkGameScreen.js";
+import { NetworkJoinScreen } from "./screens/NetworkJoinScreen.js";
+import { NetworkLobbyScreen } from "./screens/NetworkLobbyScreen.js";
 import { ResumePromptScreen } from "./screens/ResumePromptScreen.js";
 import { RoundResultScreen } from "./screens/RoundResultScreen.js";
 import { SetupScreen } from "./screens/SetupScreen.js";
 import { StoreTurnScreen } from "./screens/StoreTurnScreen.js";
 import { TeacherOverviewScreen } from "./screens/TeacherOverviewScreen.js";
+import { TeacherSessionScreen } from "./screens/TeacherSessionScreen.js";
 import { useGameSession, type GameInit } from "./useGameSession.js";
 
 /** 사람이 결정할 게 없는 phase — 조용히 자동으로 다음 단계로 넘어간다. */
@@ -35,7 +41,8 @@ type Screen =
   | { kind: "setup" }
   | { kind: "playing"; init: GameInit; key: number };
 
-export function App() {
+/** 기존 로컬 1인 플레이 경로 (Milestone 4 4-b 이전의 `App` 그대로, 순수 이동). */
+function LocalGameFlow() {
   const [screen, setScreen] = useState<Screen>({ kind: "checking" });
 
   // 마운트 시 저장된 게임이 있는지 한 번 확인한다. 이미 끝난 게임(라운드가 다 지난 저장분)은
@@ -68,11 +75,7 @@ export function App() {
   };
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <h1>시장경제 체험 게임</h1>
-      </header>
-
+    <>
       {screen.kind === "checking" && <div className="auto-advance">불러오는 중…</div>}
 
       {screen.kind === "resume-prompt" && (
@@ -104,7 +107,7 @@ export function App() {
       {screen.kind === "playing" && (
         <GameScreen key={screen.key} init={screen.init} onRestart={restartFromScratch} />
       )}
-    </div>
+    </>
   );
 }
 
@@ -198,7 +201,10 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
             state={state}
             player={player}
             isLastRound={state.currentRound === state.config.totalRounds}
-            onNext={() => advance()}
+            onNext={() => {
+              session.acknowledgeRoundResult(player.id);
+              advance();
+            }}
             disabled={isAdvancing}
           />
         )}
@@ -212,5 +218,76 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
         <TeacherOverviewScreen state={state} onClose={() => setTeacherViewOpen(false)} />
       )}
     </>
+  );
+}
+
+type TopMode =
+  | { kind: "mode-select" }
+  | { kind: "local" }
+  | { kind: "network-role-select" }
+  | { kind: "network-teacher" }
+  | { kind: "network-join" }
+  | { kind: "network-lobby"; sessionId: string; token: string; slot: PlayerSlot }
+  | { kind: "network-playing"; sessionId: string; token: string; slot: PlayerSlot };
+
+export function App() {
+  const [mode, setMode] = useState<TopMode>({ kind: "mode-select" });
+  const client = useMemo(() => new SessionClient(), []);
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <h1>시장경제 체험 게임</h1>
+      </header>
+
+      {mode.kind === "mode-select" && (
+        <div className="card">
+          <button className="primary" onClick={() => setMode({ kind: "local" })} style={{ marginRight: 12 }}>
+            혼자 하기
+          </button>
+          <button className="secondary" onClick={() => setMode({ kind: "network-role-select" })}>
+            함께 하기
+          </button>
+        </div>
+      )}
+
+      {mode.kind === "local" && <LocalGameFlow />}
+
+      {mode.kind === "network-role-select" && (
+        <div className="card">
+          <button className="primary" onClick={() => setMode({ kind: "network-teacher" })} style={{ marginRight: 12 }}>
+            교사로 세션 만들기
+          </button>
+          <button className="secondary" onClick={() => setMode({ kind: "network-join" })}>
+            학생으로 참가
+          </button>
+        </div>
+      )}
+
+      {mode.kind === "network-teacher" && <TeacherSessionScreen client={client} />}
+
+      {mode.kind === "network-join" && (
+        <NetworkJoinScreen
+          client={client}
+          onJoined={({ sessionId, token, slot }) => setMode({ kind: "network-lobby", sessionId, token, slot })}
+        />
+      )}
+
+      {mode.kind === "network-lobby" && (
+        <NetworkLobbyScreen
+          client={client}
+          sessionId={mode.sessionId}
+          token={mode.token}
+          slot={mode.slot}
+          onLobbyClosed={() =>
+            setMode({ kind: "network-playing", sessionId: mode.sessionId, token: mode.token, slot: mode.slot })
+          }
+        />
+      )}
+
+      {mode.kind === "network-playing" && (
+        <NetworkGameScreen client={client} sessionId={mode.sessionId} token={mode.token} slot={mode.slot} />
+      )}
+    </div>
   );
 }

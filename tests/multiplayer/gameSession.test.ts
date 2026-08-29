@@ -432,3 +432,175 @@ describe("GameSession multiplayer core (Milestone 4 1단계: studentCount > 1, s
     },
   );
 });
+
+describe("GameSession.acknowledgeRoundResult (D-030: round-result requires everyone to ack)", () => {
+  async function driveToRoundResult(session: GameSession): Promise<void> {
+    while (session.getState().currentPhase !== "round-result") {
+      await session.advancePhase(true);
+    }
+  }
+
+  it("throws when called outside the round-result phase", () => {
+    const session = new GameSession(1);
+    expect(session.getState().currentPhase).not.toBe("round-result");
+    expect(() => session.acknowledgeRoundResult(session.getHumanPlayer().id)).toThrow();
+  });
+
+  it("throws for a playerId that isn't one of this session's human players", async () => {
+    const session = new GameSession(1);
+    await driveToRoundResult(session);
+
+    expect(() => session.acknowledgeRoundResult("no-such-player")).toThrow();
+  });
+
+  it("keeps waiting for human input until every human player has acknowledged", async () => {
+    const session = new GameSession(1, undefined, undefined, 2);
+    await driveToRoundResult(session);
+    const [playerA, playerB] = session.getPlayers();
+
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    expect(session.getUnsubmittedParticipantIds().sort()).toEqual([playerA!.id, playerB!.id].sort());
+
+    session.acknowledgeRoundResult(playerA!.id);
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    expect(session.getUnsubmittedParticipantIds()).toEqual([playerB!.id]);
+
+    session.acknowledgeRoundResult(playerB!.id);
+    expect(session.isWaitingForHumanInput()).toBe(false);
+    expect(session.getUnsubmittedParticipantIds()).toEqual([]);
+  });
+
+  it("advances to the next round's company-turn once everyone has acknowledged, and requires fresh acks next round", async () => {
+    const session = new GameSession(1, undefined, undefined, 2);
+    await driveToRoundResult(session);
+    const [playerA, playerB] = session.getPlayers();
+    expect(session.getState().currentRound).toBe(1);
+
+    session.acknowledgeRoundResult(playerA!.id);
+    session.acknowledgeRoundResult(playerB!.id);
+
+    const result = await session.advancePhase(false);
+    expect(result.phase).toBe("round-result");
+    expect(session.getState().currentPhase).toBe("company-turn");
+    expect(session.getState().currentRound).toBe(2);
+
+    // Play through round 2 and reach its own round-result: last round's acks must not carry over.
+    await driveToRoundResult(session);
+    expect(session.getState().currentRound).toBe(2);
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    expect(session.getUnsubmittedParticipantIds().sort()).toEqual([playerA!.id, playerB!.id].sort());
+  });
+
+  it("gates the final round's game-over transition on real (non-forced) acks, not just force-bypass", async () => {
+    // The existing "reaches gameOver" tests all drive with advancePhase(true) throughout, which
+    // bypasses this gate entirely rather than exercising it. This test confirms the gate itself
+    // (not force) is what the last round's round-result -> gameOver transition actually depends on.
+    const session = new GameSession(1, undefined, undefined, 2);
+    const [playerA, playerB] = session.getPlayers();
+    const totalRounds = session.getState().config.totalRounds;
+
+    for (let round = 1; round < totalRounds; round++) {
+      await driveToRoundResult(session);
+      expect(session.getState().currentRound).toBe(round);
+      session.acknowledgeRoundResult(playerA!.id);
+      session.acknowledgeRoundResult(playerB!.id);
+      await session.advancePhase(false);
+    }
+
+    // Now at the final round's round-result, reached without ever forcing past a real ack gate.
+    await driveToRoundResult(session);
+    expect(session.getState().currentRound).toBe(totalRounds);
+
+    session.acknowledgeRoundResult(playerA!.id);
+    expect(session.isWaitingForHumanInput()).toBe(true);
+    await expect(session.advancePhase(false)).rejects.toThrow();
+
+    session.acknowledgeRoundResult(playerB!.id);
+    const result = await session.advancePhase(false);
+    expect(result.gameOver).toBe(true);
+    expect(session.getState().currentRound).toBe(totalRounds + 1);
+
+    // Acknowledging again post-game-over must stay a harmless no-op (server polling/ack paths
+    // may still call this after the game has ended).
+    expect(() => session.acknowledgeRoundResult(playerA!.id)).not.toThrow();
+  });
+});
+
+describe("GameSession.applyBusinessSetupChoices (Milestone 4 4단계 서버 부분: 다인원 로비)", () => {
+  it("throws when called outside round 1's company-turn", async () => {
+    const session = new GameSession(1, undefined, undefined, 2);
+    await session.advancePhase(true); // company-turn -> company-settlement
+
+    const [playerA] = session.getPlayers();
+    expect(() =>
+      session.applyBusinessSetupChoices(playerA!.id, {
+        companyDistrictId: "industrial",
+        companyCategoryId: "electronics",
+        storeDistrictId: "downtown",
+        storeCategoryId: "toys",
+      }),
+    ).toThrow();
+  });
+
+  it("throws for a playerId that isn't one of this session's human players", () => {
+    const session = new GameSession(1, undefined, undefined, 2);
+
+    expect(() =>
+      session.applyBusinessSetupChoices("no-such-player", {
+        companyDistrictId: "industrial",
+        companyCategoryId: "electronics",
+        storeDistrictId: "downtown",
+        storeCategoryId: "toys",
+      }),
+    ).toThrow();
+  });
+
+  it("applies the choices to exactly the given student's company/store, leaving other students untouched", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB, playerC] = session.getPlayers();
+    const state = session.getState();
+
+    const beforeB = {
+      companyDistrictId: state.companies[playerB!.companyId]!.districtId,
+      storeDistrictId: state.stores[playerB!.storeId]!.districtId,
+    };
+    const beforeC = {
+      companyDistrictId: state.companies[playerC!.companyId]!.districtId,
+      storeDistrictId: state.stores[playerC!.storeId]!.districtId,
+    };
+
+    session.applyBusinessSetupChoices(playerA!.id, {
+      companyDistrictId: "industrial",
+      companyCategoryId: "electronics",
+      storeDistrictId: "downtown",
+      storeCategoryId: "toys",
+    });
+
+    expect(state.companies[playerA!.companyId]!.districtId).toBe("industrial");
+    expect(state.companies[playerA!.companyId]!.productCategoryId).toBe("electronics");
+    expect(state.stores[playerA!.storeId]!.districtId).toBe("downtown");
+    expect(state.stores[playerA!.storeId]!.specialtyCategoryId).toBe("toys");
+
+    // Untouched students keep whatever the engine's default assignment gave them.
+    expect(state.companies[playerB!.companyId]!.districtId).toBe(beforeB.companyDistrictId);
+    expect(state.stores[playerB!.storeId]!.districtId).toBe(beforeB.storeDistrictId);
+    expect(state.companies[playerC!.companyId]!.districtId).toBe(beforeC.companyDistrictId);
+    expect(state.stores[playerC!.storeId]!.districtId).toBe(beforeC.storeDistrictId);
+  });
+
+  it("does not regress the existing single-player constructor path (setupChoices passed directly to `new GameSession`)", () => {
+    const session = new GameSession(1, {
+      companyDistrictId: "industrial",
+      companyCategoryId: "electronics",
+      storeDistrictId: "downtown",
+      storeCategoryId: "toys",
+    });
+    const state = session.getState();
+    const player = session.getHumanPlayer();
+
+    expect(state.companies[player.companyId]!.districtId).toBe("industrial");
+    expect(state.companies[player.companyId]!.productCategoryId).toBe("electronics");
+    expect(state.stores[player.storeId]!.districtId).toBe("downtown");
+    expect(state.stores[player.storeId]!.specialtyCategoryId).toBe("toys");
+  });
+});

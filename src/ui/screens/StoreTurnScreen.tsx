@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { analyzeStoreTurn } from "../../advisor/storeAdvisor.js";
 import { eligibleWholesaleListingsForStore } from "../../economy/market.js";
-import type { GameSession } from "../../multiplayer/GameSession.js";
+import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { CompanyState, GameState, ParticipantId, StoreState } from "../../types/domain.js";
 import { CATEGORY_LABELS, DISTRICT_LABELS, formatWon } from "../labels.js";
 import {
@@ -14,7 +14,7 @@ import {
 import { AdvisorPanel } from "./AdvisorPanel.js";
 
 interface Props {
-  session: GameSession;
+  session: DecisionSubmitter;
   state: GameState;
   version: number;
   store: StoreState;
@@ -41,6 +41,7 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [retailPrice, setRetailPrice] = useState(store.retailPrice > 0 ? store.retailPrice : 0);
   const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [submitError, setSubmitError] = useState<string | undefined>(undefined);
 
   const totalCost = computeTotalCost(eligible, quantities);
   const overBudget = isOverBudget(totalCost, availableCash);
@@ -118,12 +119,15 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
           const purchases = eligible
             .map((listing) => ({ listingId: listing.id, quantity: quantities[listing.id] ?? 0 }))
             .filter((line) => line.quantity > 0);
-          session.submitStoreDecision(store.id, { purchases, retailPrice });
-          onSubmitted();
+          setSubmitError(undefined);
+          Promise.resolve(session.submitStoreDecision(store.id, { purchases, retailPrice }))
+            .then(() => onSubmitted())
+            .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));
         }}
       >
         결정 제출하기
       </button>
+      {submitError && <p style={{ color: "#dc2626", fontSize: 14 }}>{submitError}</p>}
     </div>
 
     <div className="card">

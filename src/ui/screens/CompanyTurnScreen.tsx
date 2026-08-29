@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
 import { companyUnitCost } from "../../economy/config.js";
-import type { GameSession } from "../../multiplayer/GameSession.js";
+import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { CompanyState, GameState } from "../../types/domain.js";
 import { CATEGORY_LABELS, DISTRICT_LABELS, formatWon } from "../labels.js";
 import {
@@ -14,7 +14,7 @@ import {
 import { AdvisorPanel } from "./AdvisorPanel.js";
 
 interface Props {
-  session: GameSession;
+  session: DecisionSubmitter;
   state: GameState;
   version: number;
   company: CompanyState;
@@ -34,6 +34,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
   const [quality, setQuality] = useState(0.5);
   const [wholesalePrice, setWholesalePrice] = useState(Number((unitCost * 1.4).toFixed(1)));
   const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [submitError, setSubmitError] = useState<string | undefined>(undefined);
 
   const productionCost = useMemo(() => computeProductionCost(quantity, unitCost), [quantity, unitCost]);
   const overBudget = isOverBudget(productionCost, availableCash);
@@ -110,12 +111,15 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         className="primary"
         disabled={disabled || overBudget || company.productCategoryId === null}
         onClick={() => {
-          session.submitCompanyDecision(company.id, { quantity, quality, wholesalePrice });
-          onSubmitted();
+          setSubmitError(undefined);
+          Promise.resolve(session.submitCompanyDecision(company.id, { quantity, quality, wholesalePrice }))
+            .then(() => onSubmitted())
+            .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));
         }}
       >
         결정 제출하기
       </button>
+      {submitError && <p style={{ color: "#dc2626", fontSize: 14 }}>{submitError}</p>}
     </div>
 
     <div className="card">

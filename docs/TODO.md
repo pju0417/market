@@ -521,7 +521,295 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
         메시지로 다듬을 가치가 있다는 UX 참고 사항으로만 기록.
 - [ ] 4단계: 다인원 로비 — 여러 학생 각자의 창업 준비(상권/업종 선택)를 받는 화면.
       `BusinessSetupChoices`를 다인원용으로 확장하는 설계가 이 단계에서 필요하다.
-      (선행 조건이었던 D-026 해결책 확정은 아래 항목대로 이미 완료됨.)
+      (선행 조건이었던 D-026 해결책 확정은 아래 항목대로 이미 완료됨.) 사용자 요청으로
+      4-a(서버)/4-b(클라이언트)로 나눠서 진행한다.
+  - [x] **4-a: round-result 동기화(ack 게이트) + 로비 타임아웃 상수 + 관련 서버 로직/테스트**
+        — D-030에서 확정한 대로, CLAUDE.md 2절의 "한 학생이 다른 학생의 턴 종료를 기다리지
+        않는다" 원칙에 국지적 예외를 둔다: round-result phase에서 다음 라운드 company-turn으로
+        넘어가는 전환 지점만 전원 확인(ack)을 요구한다(company/store/household-turn의 동시
+        처리 원칙은 무영향).
+      - architect가 실제 코드를 읽고 확인한 사전 조사대로, `GameSession.ts`의
+        `PHASES_REQUIRING_HUMAN_INPUT` 배열은 실제로는 어디에서도 호출되지 않는 죽은
+        코드였다(`phaseNeedsHumanInput()`이라는, 자기 자신 말고는 아무도 안 부르는 export
+        함수에게만 쓰임) — 실제 게이트는 `getUnsubmittedParticipantIds()`의 switch문이라,
+        여기에 `"round-result"` 케이스를 추가하는 방식으로 구현했다(배열에도 정합성 차원에서
+        `"round-result"`를 같이 추가).
+      - `src/multiplayer/GameSession.ts`: 신규 private 필드
+        `acknowledgedRoundResultPlayerIds: Set<ParticipantId>`(제출값이 아니라 확인 여부만
+        담음), `getUnsubmittedParticipantIds()`의 switch문에 `"round-result"` 케이스(사람
+        플레이어의 `PlayerState.id` 기준, companyId/storeId/householdId 아님), 신규 public
+        메서드 `acknowledgeRoundResult(playerId)`(기존 `submit*`와 같은 패턴: phase 불일치·
+        비인간/미지 id면 throw), `advancePhase()`가 phase 실행 성공 후 기존
+        `pendingCompanyInputs.clear()` 등을 호출하는 지점에 `acknowledgedRoundResultPlayerIds.clear()`도
+        추가(매 phase 실행 후 무조건 초기화 — 각자 자기 phase에서만 검사되므로 안전, 다음
+        라운드 round-result에서 이전 라운드 ack가 남아있지 않음을 보장). 기존
+        메서드(생성자, submit*, advancePhase의 나머지 로직, getVersion 등)는 시그니처·동작
+        전혀 무변경.
+      - `src/server/httpApi.ts`: 신규 라우트 `POST /api/sessions/:id/acknowledge-round-result`
+        (참가자 토큰 인증만 필요 — 토큰이 이미 playerId로 직접 resolve되므로 `submit/*`처럼
+        body의 id와 대조하는 로직 불필요, 토큰 없음/미인식 401, phase 불일치 등으로
+        `acknowledgeRoundResult`가 throw하면 400, 성공 시 `advanceUntilInputRequired(false)` +
+        `syncPhaseTimer` 재동기화 후 200). `checkAndApplyTimeout()` 맨 앞에 예외 추가: 현재
+        phase가 `"round-result"`이면 D-029의 120초 자동 강제진행을 건너뛴다(교사의 수동
+        force-advance는 이 함수와 무관하게 그대로 유효) — 결과를 읽는 시간에 제출 타임아웃과
+        같은 리듬을 강제로 상속시키지 않기 위함(D-030, 정확한 숫자 정책은 이번 범위 밖).
+      - `src/server/timeoutConfig.ts`: 신규 상수 `DEFAULT_LOBBY_TIMEOUT_MS = 180_000`(다인원
+        로비 대기 타임아웃, 사용자 확정값 — D-030). 이번 4-a에서는 상수만 추가, 실제 사용은
+        4-b에서 로비 기능을 만들 때 이어진다.
+      - `src/ui/App.tsx`: 예외적으로 이번에 포함(로컬 1인 게임 회귀 방지 필수) — round-result
+        화면의 "다음 라운드로" 버튼 콜백을 `session.acknowledgeRoundResult(player.id)` 호출 후
+        `advance()`를 부르도록 변경. 이 한 곳 외에 `App.tsx`/`useGameSession.ts`/세 턴
+        화면/`src/ui/network/*`/`NetworkSessionMonitor.tsx`는 전혀 건드리지 않았다(4-b 범위).
+        `RoundResultScreen.tsx` 자체(props, 렌더링)도 무변경.
+      - 검증: `tests/multiplayer/gameSession.test.ts`에 `acknowledgeRoundResult` 신규
+        describe 블록 4개(round-result 아닌 phase에서 호출 시 throw, 존재하지 않는
+        playerId면 throw, 한 명만 ack해도 대기 유지·전원 ack 후 다음 라운드 company-turn
+        진입, 다음 라운드 round-result에서 ack Set이 다시 비어 새로 요구됨). `tests/server/httpApi.test.ts`에
+        신규 `acknowledge-round-result` describe 블록 4개(401 무토큰/미인식 토큰, 400 phase
+        불일치, 200 정상 ack + 전원 ack 전까지 진행 안 됨 + 전원 ack 후 round 2 company-turn
+        진입, round-result에서는 제출 타임아웃 자동 강제진행을 건너뛰되 교사 수동
+        force-advance는 여전히 동작함 + 다른 phase는 여전히 자동 강제진행되는 회귀 확인).
+        `tests/server/integration.test.ts`: 기존 "household 제출 직후 라운드 2 진입을 기대"하던
+        테스트 2건을 수정 — 이제 그 시점엔 `currentPhase==="round-result"`이고
+        `currentRound===1`로 멈춰 있음을 먼저 확인한 뒤, 두 참가자 모두의
+        `acknowledge-round-result` 호출(한 명만 ack 시 여전히 라운드 1 round-result에 머무는
+        것, 둘 다 ack 후 실제로 라운드 2 company-turn으로 넘어가는 것 포함)을 추가해 검증을
+        이어가도록 고쳤다. `tests/ui/submissionStatus.test.ts`: "phases outside
+        {company-turn, store-turn, household-turn} never map to a participant field"라는
+        주석이 이제 사실과 다름을 반영해 갱신(round-result의 `unsubmittedParticipantIds`는
+        이제 실제 `PlayerState.id`를 담지만, `computeUnsubmittedParticipants`의
+        `PARTICIPANT_ID_FIELD_BY_PHASE`에는 아직 매핑이 없어 여전히 빈 배열을 반환한다는
+        점을 명확히 함 — 실제 매핑 추가는 4-b). 전체 테스트 302개(기존 293개 + 신규 9개:
+        gameSession 4 + httpApi 4 + submissionStatus 주석만 갱신, integration은 기존 2개
+        테스트를 확장) 통과. `npm run typecheck`(양쪽 tsconfig)·`npm run lint --
+        --max-warnings=0`·`npm run build`(65 모듈, 기존과 동일해 서버 코드가 클라이언트
+        번들에 섞이지 않음) 전부 직접 실행해 클린 확인. `src/engine`/`src/economy`/
+        `src/npc`/`src/advisor`는 전혀 건드리지 않았다(`git diff`로 무변경 확인).
+      - code-reviewer 재검증(직접 명령 실행 + git diff/코드 추적 + 자체 임시 스크립트로
+        런타임 동작까지 직접 재현, blocking 이슈 없음): ack 상태 격리·id 네임스페이스
+        (`PlayerState.id`)·phase 가드·라우트 인증(토큰이 이미 playerId로 확정되므로
+        `submit/*`와 달리 body id 대조 불필요, 스푸핑 경로 없음)·타임아웃 예외(다른 phase
+        회귀 없음, 교사 수동 강제진행 유효)·기존 통합 테스트 수정이 검증을 느슨하게 만든 게
+        아니라 오히려 강화했음·범위 위반 없음·`DEFAULT_LOBBY_TIMEOUT_MS` 미사용 export에도
+        lint 클린을 전부 코드 추적 + 직접 명령 실행으로 확인. **테스트 커버리지 공백 1건
+        발견**: 마지막 라운드(7라운드)의 round-result → gameOver 전환이 실제로 "강제 우회
+        없이" 이 ack 게이트에 의존하는지를 검증하는 커밋된 테스트가 없었다(기존 "gameOver에
+        도달" 테스트는 전부 `advancePhase(true)`로 게이트 자체를 우회함) — code-reviewer가
+        임시 스크립트로 직접 동작은 정상임을 확인했으나(마지막 라운드도 동일 메커니즘으로
+        올바르게 gameOver를 발생시킴), 커밋된 테스트가 이를 뒷받침하지 않는다는 지적. CLAUDE.md
+        3절 기준 "누락된 테스트 커버리지"는 자동 수정 대상이라 오케스트레이터가 직접
+        `tests/multiplayer/gameSession.test.ts`에 신규 테스트("gates the final round's
+        game-over transition on real (non-forced) acks, not just force-bypass") 1개를
+        추가했다 — 2인 세션으로 라운드 1~6은 매 라운드 실제 ack로 정상 진행시키고, 7라운드
+        round-result에서 한 명만 ack했을 때 `advancePhase(false)`가 여전히 reject되는지,
+        둘 다 ack한 뒤에야 `gameOver:true`와 `currentRound===8`을 반환하는지, game-over 이후
+        `acknowledgeRoundResult` 재호출이 안전한 no-op인지까지 확인. 재검증: 전체 테스트
+        303개(기존 302 + 신규 1) 통과, `npm run typecheck`(양쪽 tsconfig)·
+        `npm run lint -- --max-warnings=0` 클린. 그 외 code-reviewer가 남긴 사소한 관찰
+        1건(`handleAcknowledgeRoundResult`가 `handleSubmit`처럼 `getPlayers().find(...)`를
+        먼저 하지 않고 `GameSession` 내부 검증에 그대로 위임하는 비대칭 — 기능적으로 무해,
+        향후 인증 모델을 리팩터링할 때 참고)은 이번엔 손대지 않음.
+      - 오케스트레이터가 이 세션의 브라우저 도구로 로컬 1인 경로 회귀를 직접 확인(엔지니어
+        서브에이전트는 브라우저 도구가 없었음): 저장된 게임을 "이어하기"로 정확히 1라운드
+        round-result 화면까지 복원 → "다음 라운드로" 클릭 → 콘솔 에러 없이 정확히 2라운드
+        기업 턴으로 진행됨을 확인(가장 회귀 위험이 컸던 지점, `App.tsx`의 새 콜백이 실제
+        브라우저에서도 멈추지 않고 정상 동작함을 실측).
+  - [x] **4-b 서버 부분: 다인원 로비 엔드포인트(창업 준비 제출/닫기)** — 4-a에서
+        `BusinessSetupChoices` 다인원 확장의 서버 쪽이 빠져 있던 것을 채웠다(4-b 클라이언트
+        — 조인/로비/네트워크 턴 화면 — 는 이번에도 다루지 않고 이후 별도 진행).
+      - `src/multiplayer/GameSession.ts`: 신규 public 메서드
+        `applyBusinessSetupChoices(playerId, choices)` — 생성자의 단일 플레이어 전용 로직을
+        임의의 학생 1명 단위로 일반화. `currentRound===1 && currentPhase==="company-turn"`일
+        때만 허용(그 외 throw), 미지 playerId도 throw. 생성자는 이 메서드를 내부적으로
+        재사용하도록 리팩터링(기존 `humanPlayers.length===1` 조건은 그대로 유지) —
+        기존 단일 플레이어 생성자 경로는 회귀 없음(테스트로 확인).
+      - `src/server/sessionRegistry.ts`: `SessionEntry`에 `lobbySubmittedPlayerIds:
+        Set<ParticipantId>`·`lobbyStartedAt: number`·`lobbyClosedByTeacher: boolean` 필드와
+        헬퍼 `isLobbyOpen(entry)`(교사가 명시적으로 닫았거나/전원 제출했거나/
+        `DEFAULT_LOBBY_TIMEOUT_MS`(180초, D-030에서 이미 확정된 상수)를 초과했으면 닫힘)
+        추가.
+      - `src/server/httpApi.ts`: `POST /api/sessions/:id/setup`(참가자 토큰 인증, body를
+        `src/economy/config.ts`의 기존 `DISTRICT_IDS`/`PRODUCT_CATEGORIES` 상수로 검증 —
+        새 상수 신설 없음, 유효하지 않으면 400, `applyBusinessSetupChoices` 실패 시 400, 로비가
+        이미 닫혔으면 400, 성공 시 200 + `lobbySubmittedPlayerIds.add`), `POST
+        /api/sessions/:id/close-lobby`(교사 토큰 필수, 불일치/누락 401, 성공 시
+        `lobbyClosedByTeacher=true`, 재호출해도 안전한 no-op 200) 신규. `handleSubmit`의
+        company 제출 경로에 로비가 열려 있으면 400을 반환하는 가드 추가(store/household
+        제출에는 가드 불필요 — 기업 턴 이후에나 도달하는 phase임을 통합 테스트로 재확인).
+        `handleState`(`GET /state`) 응답에 `lobby: { open, unsubmittedPlayerIds }` 필드 추가.
+      - 구현 중 실측한 회귀와 조치: 새 company 제출 가드를 추가하자 기존
+        `tests/server/httpApi.test.ts`/`tests/server/integration.test.ts`의 8개 테스트가
+        `createTestSession` 직후 로비 처리 없이 바로 `submit/company`를 호출하다 즉시 400으로
+        실패하는 것을 실제로 확인했다 — 로비 자체를 검증하려는 의도가 아니었던 테스트들이므로,
+        `httpApi.test.ts`의 공유 헬퍼 `createTestSession`에 `closeLobby`(기본값 true) 옵션을
+        추가해 세션 생성 직후 교사 토큰으로 로비를 바로 닫도록 했고, `integration.test.ts`의
+        두 테스트에도 `close-lobby` 호출 단계를 추가했다(로비 자체를 검증하는 신규 테스트만
+        `closeLobby: false`로 열어 둔 채로 받음).
+      - **구현 중 발견한 별개의 설계 공백 → code-reviewer가 재현 확인 → 오케스트레이터가 직접
+        수정 완료**: 로비 타임아웃(180초)이 제출 타임아웃(120초)보다 길어서, 로비가 실제로
+        120초 넘게 걸리면 학생들이 아직 로비 화면에 있는 동안에도 company-turn phase의 제출
+        타임아웃 시계는 세션 생성 시점부터 이미 독립적으로 돌고 있어, 로비가 아직 열려있는
+        도중에 `GET /state` 폴링이 `checkAndApplyTimeout`을 통해 company-turn을 봇 폴백으로
+        강제진행시켜 버리는 버그였다(`checkAndApplyTimeout`은 `round-result`만 예외 처리하고
+        로비 중 company-turn은 예외 처리하지 않았음). code-reviewer가 실제 `handleApiRequest`
+        호출로 이 버그를 직접 재현해 확인(로비가 열려있다고 응답하는데 실제로는 이미
+        store-turn으로 넘어가 있고, 남은 학생들은 이후 `applyBusinessSetupChoices`의 "라운드
+        1 기업턴 실행 후" 가드에 걸려 영구히 창업 준비를 할 수 없게 됨). 해결책 A(타임아웃
+        예외만 추가, phase 시계는 세션 생성 시점 그대로)와 B(로비가 실제로 닫히는 순간 시계
+        자체를 리셋)를 놓고 B로 근본 수정: `sessionRegistry.ts`에 `SessionEntry.lobbyTimerConsumed`
+        플래그와 `markLobbyClosedIfNeeded(entry)` 헬퍼 추가(로비가 닫힌 순간 딱 한 번만
+        `phaseStartedAt`을 다시 시작, 플래그로 중복 호출 방지). 로비를 실제로 닫는 두 지점
+        (`handleSetup`의 마지막 제출, `handleCloseLobby`)에서 그 즉시 호출해 정확한 시점에
+        리셋하고, `checkAndApplyTimeout`에도 안전망으로 남겨(아무도 명시적으로 닫지 않고
+        시간초과로만 조용히 닫히는 경우 대비) `isLobbyOpen(entry)`이면 무조건 건너뛰도록
+        단순화했다. `tests/server/httpApi.test.ts`에 정확히 이 시나리오(로비 130초 경과 →
+        아직 열려있고 company-turn 유지 확인 → 교사가 닫음 → 닫힌 직후엔 아직 안 넘어감 →
+        닫힌 시점부터 119초 후엔 아직 유지 → 121초 후엔 정상적으로 넘어감)를 재현하는 회귀
+        테스트 1개 추가(수정 전 코드로는 이 테스트가 실패함을 직접 확인). 기존
+        `DEFAULT_SUBMISSION_TIMEOUT_MS`의 "실제 제출을 봇값으로 덮어쓰지 않는다" 테스트는
+        `createTestSession`이 기본으로 로비를 즉시 닫아두는 헬퍼라 이 수정으로 타이밍 가정이
+        바뀌어(로비가 닫히는 순간 시계가 리셋되므로) 한 번 실패했다가, 실제로는 테스트 자체가
+        올바른 동작을 검증하고 있었음을 확인하고 코드 쪽 수정만으로(테스트 변경 없이) 다시
+        통과하게 됨. 전체 테스트 317개(기존 315 + 신규 2: 위 회귀 테스트 1개, 그리고 4-b
+        클라이언트 쪽 `submissionStatus` 신규 매핑 테스트 1개) 통과, `npm run typecheck`(양쪽
+        tsconfig)·`npm run lint -- --max-warnings=0`·`npm run build`(75 모듈, 4-b 클라이언트
+        신규 화면 포함) 모두 직접 실행해 클린 확인.
+      - 검증: `tests/multiplayer/gameSession.test.ts`에 `applyBusinessSetupChoices` 신규
+        테스트 4개(라운드 1 기업턴이 아닐 때 throw, 미지 playerId throw, 지정한 학생만
+        정확히 바뀌고 다른 학생은 그대로임, 기존 생성자 방식 단일 플레이어 경로 회귀 없음).
+        `tests/server/httpApi.test.ts`에 신규 describe 블록(`/setup`/`/close-lobby`) 8개
+        테스트(401 무토큰, 400 잘못된 상권/업종 id, 200 정상 적용 + 로비가 열려있는 동안
+        submit/company 400, 전원 setup 완료 시 로비 자동 닫힘 + submit/company 통과, 로비가
+        이미 닫힌 뒤 `/setup` 400, `/close-lobby` 401(무토큰/학생 토큰)·200(교사 토큰)·재호출
+        no-op 200, `GET /state`의 `lobby` 필드가 열림/부분제출/닫힘 각 시점에 정확한지, 로비
+        타임아웃이 지나면 자동으로 닫히고 submit/company가 통과하는지 — 이 마지막 테스트는
+        `vi.useFakeTimers()` 대신 `sessionRegistry.getSession()`으로 `entry.lobbyStartedAt`을
+        직접 과거로 돌리는 방식을 썼다, 위 설계 공백과 얽히지 않기 위함). 전체 테스트 315개
+        (기존 303 + 신규 12: gameSession 4 + httpApi 8) 통과, `npm run typecheck`(양쪽
+        tsconfig)·`npm run lint -- --max-warnings=0`·`npm run build`(65 모듈, 기존과 동일)
+        모두 직접 실행해 클린 확인. `src/engine`/`src/economy`/`src/npc`/`src/advisor`는
+        `git diff --stat`로 무변경 확인(`src/economy/config.ts`의 기존 `DISTRICT_IDS`/
+        `PRODUCT_CATEGORIES`는 읽기 전용으로 import해 재사용만 함). `src/ui/*`는 이번
+        작업에서 전혀 건드리지 않았다.
+  - [x] **4-b 클라이언트 부분: 다인원 로비 UI 배선(교사 세션 생성/학생 참가/로비 대기/네트워크
+        게임 화면)** — D-028/D-029/D-030 및 4-a/4-b 서버 구현 위에, 클라이언트에서 실제로
+        로비→게임을 완주할 수 있게 했다. **기존 로컬 1인 플레이 경로는 전혀 손대지 않고
+        `App.tsx`의 기존 `App()` 함수 본문 전체를 순수 이동만으로 `LocalGameFlow()`로 옮겼다**
+        (`GameScreen` 함수도 무변경으로 같은 파일에 유지) — `git diff`로 실제 순수 이동임을
+        확인(유일한 JSX 변경은 바깥 `<div className="app-shell"><header>...` 래퍼를 새
+        최상위 `App()`으로 끌어올린 것뿐이며, `onNext`의 `acknowledgeRoundResult` 호출은 4-a에서
+        이미 반영된 것을 그대로 유지함).
+      - 신규 파일:
+        - `src/ui/network/DecisionSubmitter.ts` — 로컬 `GameSession`과 네트워크
+          `NetworkDecisionSubmitter`가 공통으로 만족하는 좁은 인터페이스(순수 타입, 반환 타입
+          `void | Promise<void>`로 양쪽 모두 구조적으로 만족).
+        - `src/ui/network/NetworkDecisionSubmitter.ts` — `DecisionSubmitter`를
+          `SessionClient`+`sessionId`+`token`으로 구현하는 얇은 어댑터.
+        - `src/ui/network/useNetworkGameSession.ts` — `NetworkSessionMonitor.tsx`가 쓰던
+          폴링 패턴(`since` 버전 추적, 3초 간격)을 재사용하는 신규 훅. `useGameSession.ts`
+          (로컬 전용, `useSyncExternalStore` 기반)는 전혀 건드리지 않았다.
+        - `src/ui/screens/TeacherSessionScreen.tsx` — 학생 수 입력 → 세션 생성 →
+          `storeTeacherToken`으로 토큰 저장 → 세션 번호 표시 + `NetworkSessionMonitor` 재사용 +
+          "로비 지금 닫기" 버튼.
+        - `src/ui/screens/NetworkJoinScreen.tsx` — 세션 번호 입력 → 슬롯 목록 조회 → 슬롯 선택
+          → join → 결과를 `sessionStorage`(`economy-game:network-join`)에 저장 후 콜백.
+        - `src/ui/screens/NetworkLobbyScreen.tsx` — 미제출 시 기존 `SetupScreen`을 그대로
+          재사용(수정 없이 import), 제출 후에는 `useNetworkGameSession`으로 `lobby.open`을
+          폴링하며 대기, `lobby.unsubmittedPlayerIds`를 `GET /slots` 결과와 매칭해 "기다리는
+          중: OO" 표시, `lobby.open===false`가 되면 `onLobbyClosed()` 호출.
+        - `src/ui/screens/NetworkGameScreen.tsx` — `useNetworkGameSession`으로 폴링하며
+          phase별로 기존 로컬 턴 화면(`CompanyTurnScreen`/`StoreTurnScreen`/
+          `HouseholdTurnScreen`)을 `session={new NetworkDecisionSubmitter(...)}`(useMemo)로
+          재사용(`onSubmitted={() => {}}` — 서버가 제출 성공 시 자동으로
+          `advanceUntilInputRequired`를 호출하므로 클라이언트가 할 일이 없음), `round-result`는
+          `RoundResultScreen` 재사용 + `onNext`에서 `acknowledgeRoundResult` 호출(로컬처럼
+          `advance()`를 직접 부를 필요 없음), `gameOver`는 `GameOverScreen` 재사용(`onRestart`는
+          `window.location.reload()`로 처음 화면으로 되돌림).
+      - 기존 파일 수정:
+        - `src/ui/network/sessionClient.ts`: `StateResult`에 `lobby: { open,
+          unsubmittedPlayerIds }` 필드 추가(서버가 이미 내려주던 값), `setupBusinessChoices`/
+          `closeLobby`/`acknowledgeRoundResult` 메서드 3개 추가(기존 메서드와 동일한 패턴).
+        - `src/ui/network/submissionStatus.ts`: `PARTICIPANT_ID_FIELD_BY_PHASE`에
+          `"round-result": "playerId"` 추가(D-030에서 실제 `PlayerState.id` 값이 오는 것을
+          이제 `PlayerSlot.playerId`로 매핑).
+        - `src/ui/screens/{CompanyTurnScreen,StoreTurnScreen,HouseholdTurnScreen}.tsx`: `Props`의
+          `session: GameSession` → `session: DecisionSubmitter`로 좁힘(import 교체). 제출
+          버튼의 `onClick`을 `Promise.resolve(session.submit*(...)).then(() =>
+          onSubmitted()).catch((err) => setSubmitError(...))` 패턴으로 최소 변경(신규
+          `submitError` state + 버튼 아래 에러 문구 추가) — 그 외 JSX/로컬 계산/렌더링은
+          전혀 건드리지 않았다. 로컬 경로에서는 `GameSession`의 동기 반환값이
+          `Promise.resolve()`로 감싸져도 다음 microtask에 `onSubmitted()`가 불리는 것 외에
+          동작 차이가 없음을 확인.
+        - `src/ui/App.tsx`: 최상위에 `TopMode` 유니언(`mode-select`/`local`/
+          `network-role-select`/`network-teacher`/`network-join`/`network-lobby`/
+          `network-playing`) 기반의 새 `App()` 함수를 추가하고, 기존 로직은 전부
+          `LocalGameFlow()`(순수 이동)와 `GameScreen()`(무변경)에 그대로 유지.
+      - 테스트: 새 컴포넌트 자체의 렌더링 테스트는 추가하지 않음(Milestone 2에서 이미 전체
+        RTL/jsdom 스위트 도입을 보류하기로 결정한 것을 유지 — 브라우저 E2E 검증은
+        오케스트레이터가 직접 수행). `tests/ui/submissionStatus.test.ts`에 round-result
+        매핑 검증 케이스 1개 추가(`"round-result": "playerId"` 매핑으로 `unsubmittedPlayerIds`의
+        `PlayerState.id`가 올바른 `displayName`으로 매칭되는지), 기존 "매핑 없음" 테스트의
+        주석/설명을 갱신(round-result가 이제 실제로 매핑됨을 반영). `DecisionSubmitter`/
+        `NetworkDecisionSubmitter`는 순수 얇은 어댑터라 별도 유닛 테스트를 새로 추가하지
+        않음(서버 계약은 `tests/server/httpApi.test.ts`/`tests/server/integration.test.ts`가
+        이미 검증, `sessionClient.ts` 신규 메서드 3개도 기존 메서드들과 동일한 얇은 패턴이라
+        별도 테스트 파일을 새로 만들 필요는 없다고 판단).
+      - 검증: 전체 테스트 316개(기존 315 + 신규 1: submissionStatus round-result 매핑) 통과,
+        `npm run typecheck`(양쪽 tsconfig)·`npm run lint -- --max-warnings=0`·`npm run build`
+        모두 직접 실행해 클린 확인(빌드 75 모듈 — 신규 네트워크 UI 파일들과, 이전까지 어디서도
+        import되지 않아 번들에서 제외돼 있던 `sessionClient.ts`/`submissionStatus.ts`/
+        `NetworkSessionMonitor.tsx`가 이번에 실제로 `App.tsx`에서 도달 가능해지면서 번들에
+        포함됨 — `NetworkSessionMonitor.tsx`가 참조하는 `src/server/timeoutConfig.ts`(순수
+        상수 파일, Node 전용 API 없음)도 함께 번들에 포함되는 것을 확인했고, D-029에서 이미
+        승인된 패턴이라 별도 문제로 보지 않음). `src/engine`/`src/economy`/`src/npc`/
+        `src/advisor`/`src/multiplayer/GameSession.ts`/`src/server/*`/`src/ui/useGameSession.ts`는
+        `git diff --stat`로 이번 작업에서 무변경임을 확인(이 커밋 이전 4-a/4-b 서버 작업에서의
+        변경만 남아 있음). 로컬 1인 플레이 경로와 네트워크 다인원 경로(2개 탭 시뮬레이션)의
+        브라우저 실측 검증은 오케스트레이터가 이어서 수행할 예정.
+      - **오케스트레이터의 브라우저 3탭 E2E 검증 완료(교사 1 + 학생 2)**: 세션 생성 → 학생
+        2명 참가 → 각자 다른 창업 준비 제출(로비 자동 닫힘 확인) → 기업/가게/가계 턴을 각자
+        독립적으로 진행(서로 다른 손익·시장점유율 정상 반영) → 라운드 결과 ack 게이트가
+        실제로 "한 명만 확인해선 안 넘어가고 둘 다 확인해야 진행"됨을 확인 → 라운드 2 진입.
+        전 과정 콘솔 에러 0건. 이 과정에서 실제 브라우저 전용 버그 1건 발견·수정:
+        `SessionClient` 생성자의 `fetchImpl: FetchLike = fetch` 기본값이 `this.fetchImpl(...)`
+        형태로 메서드처럼 호출되며 네이티브 fetch가 "Illegal invocation"을 던짐(가짜 fetch를
+        주입하는 단위 테스트는 `this` 바인딩을 신경 안 써서 이 버그를 못 잡음) —
+        `globalThis.fetch.bind(globalThis)`로 수정, 브라우저 재검증 완료.
+      - **code-reviewer 2차 검토가 HIGH 등급 실제 버그 2건을 발견**(이번엔 작업 트리를 직접
+        조작하지 말라고 명시해 안전하게 진행): (1) 교사의 `POST /force-advance`가 로비 게이트를
+        완전히 우회해, 로비가 열려있어도 강제진행하면 아직 `/setup` 못 낸 학생의 회사/가게가
+        엔진 기본값 그대로 실행되고 그 학생은 이후 영구히 `/setup`을 거부당하며, `GET /state`는
+        계속 `lobby.open:true`를 거짓으로 보고함. (2) `since` 기반 폴링이 로비 종료를 놓칠 수
+        있음 — 로비 상태는 `GameSession` 바깥의 서버 레지스트리 필드라 `GameSession.version`과
+        무관한데, `/close-lobby`나 시간초과에 의한 로비 종료는 `GameSession`을 안 건드려
+        `notify()`가 안 불림 — `since=<로비 닫히기 전 버전>`으로 폴링하는 학생은
+        `{unchanged:true}`만 영원히 받아 로비가 닫힌 사실을 못 봄(전원 제출로 자연히 닫히는
+        경로는 문제 없었음, 교사가 명시적으로 닫거나 시간초과인 경우만 문제).
+      - **오케스트레이터가 두 버그 모두 직접 수정**: `src/multiplayer/GameSession.ts`에 신규
+        public 메서드 `bumpVersion()`(게임 상태는 안 바꾸고 구독자에게만 알림) 추가.
+        `src/server/sessionRegistry.ts`의 `markLobbyClosedIfNeeded`가 "이번 호출로 실제 방금
+        닫혔는지" `boolean`을 반환하도록 변경. `src/server/httpApi.ts`: `handleCloseLobby`와
+        `checkAndApplyTimeout`의 시간초과 안전망 경로가 그 반환값이 `true`일 때만
+        `entry.session.bumpVersion()`을 호출(전원 제출 경로는 `applyBusinessSetupChoices`가
+        이미 매번 `notify()`를 부르므로 중복 불필요). `doForceAdvance`는 진입 시
+        `isLobbyOpen(entry)`이면 먼저 `/close-lobby`와 같은 효과를 적용한 뒤 강제진행을
+        이어가도록 수정(교사의 "지금 진행" 클릭을 "로비를 몰래 우회"가 아니라 "로비를 명시적
+        으로 닫고 진행"으로 해석). 클라이언트 방어도 병행: `NetworkSessionMonitor.tsx`가
+        `stateResult.lobby.open`인 동안 "지금 진행" 버튼을 숨기고 안내 문구로 대체.
+        `tests/server/httpApi.test.ts`에 두 버그를 정확히 재현하는 회귀 테스트 2개 추가.
+      - MEDIUM 관찰(`NetworkGameScreen`의 round-result 버튼에 중복 클릭 방지가 없어 ack 후
+        폴링 지연(최대 3초) 동안 재클릭하면 원문 영어 에러가 노출됨)도 함께 수정: 학생이 ack한
+        라운드 번호를 기억해 그 라운드 동안 버튼을 비활성화(실패 시 재시도 가능하도록 되돌림),
+        에러 문구도 round-result 블록 안으로 옮겨 phase 전환 후까지 안 남게 함.
+      - 오케스트레이터가 브라우저로 직접 재확인: 로비가 열려있으면 "지금 진행" 버튼이 실제로
+        안 보이고 안내 문구가 뜨며, "로비 지금 닫기" 클릭 후 네트워크 요청 로그상 폴링이
+        `since=0`(닫히기 전 버전)에서 `since=1`(닫힌 후 버전)으로 실제 전환됨을 확인(버전이
+        실제로 bump됐다는 직접 증거).
+      - 재검증: 신규 회귀 테스트 2개 포함 전체 테스트 319개(기존 317 + 2) 통과, `typecheck`
+        (양쪽 tsconfig)·`lint -- --max-warnings=0`·`build`(75 모듈) 모두 클린. LOW 등급 관찰
+        2건(join 시 저장하는 `sessionStorage` 값을 아직 아무도 읽지 않는 미완성 재접속 기능,
+        `TeacherSessionScreen`이 `NetworkSessionMonitor`와 별개의 `SessionClient`를 만들어
+        폴링이 중복되는 사소한 비효율)은 블로킹이 아니라 이번엔 손대지 않고 기록만 함.
 - [x] D-026(후보) 해결책 확정 — 사용자가 해결책 A를 승인, 구현 완료. 판정 기준을 "그 라운드
       소매시장 갱신 직후(가계 소비 시작 전) 공급 스냅숏"으로 바꿔 처리 순서 의존성을 구조적으로
       제거했다. `src/engine/simulateGame.ts`의 `RoundAccumulator`에 `roundStartRetailListings`

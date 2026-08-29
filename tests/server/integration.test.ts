@@ -52,7 +52,7 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
   it("lets two students join, submit each phase's decisions, and reach round settlement", async () => {
     const created = await postJson("/api/sessions", { studentCount: 2, rngSeed: 7 });
     expect(created.status).toBe(201);
-    const { sessionId } = created.body as { sessionId: string };
+    const { sessionId, teacherToken } = created.body as { sessionId: string; teacherToken: string };
 
     const slotsResponse = await getJson(`/api/sessions/${sessionId}/slots`);
     expect(slotsResponse.status).toBe(200);
@@ -65,6 +65,11 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     expect(joinB.status).toBe(200);
     const { token: tokenA, player: playerA } = joinA.body as JoinResult;
     const { token: tokenB, player: playerB } = joinB.body as JoinResult;
+
+    // Milestone 4 4단계 (D-030): company submissions are blocked until the lobby closes. This
+    // test predates the lobby and isn't exercising it, so the teacher closes it immediately.
+    const closeLobby = await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken);
+    expect(closeLobby.status).toBe(200);
 
     // Wrong-player submission attempt is rejected: A's token cannot submit for B's company.
     const spoofAttempt = await postJson(
@@ -135,18 +140,46 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     expect(submitHouseholdB.status).toBe(200);
 
     const afterHouseholds = await getJson(`/api/sessions/${sessionId}/state`);
-    const final = afterHouseholds.body as {
+    const afterHouseholdsState = afterHouseholds.body as {
       state: { currentPhase: string; currentRound: number; roundMetrics: unknown[] };
       unsubmittedParticipantIds: string[];
       gameOver: boolean;
     };
     // npc-consumer-behavior/round-settlement need no human input either, so this should have
-    // drained all the way to round 2's company-turn (or further) with round 1 settled.
-    expect(final.state.roundMetrics).toHaveLength(1);
-    expect(final.state.currentPhase).toBe("company-turn");
-    expect(final.state.currentRound).toBe(2);
-    expect(final.gameOver).toBe(false);
-    expect(final.unsubmittedParticipantIds.sort()).toEqual([playerA.companyId, playerB.companyId].sort());
+    // drained straight through to round-result with round 1 already settled. D-030: round-result
+    // is a special phase that requires every human player to acknowledge (not submit a decision)
+    // before the game proceeds to round 2 — this is a deliberate, local exception to "nobody
+    // waits for anybody else" for this one transition point.
+    expect(afterHouseholdsState.state.roundMetrics).toHaveLength(1);
+    expect(afterHouseholdsState.state.currentPhase).toBe("round-result");
+    expect(afterHouseholdsState.state.currentRound).toBe(1);
+    expect(afterHouseholdsState.gameOver).toBe(false);
+    expect(afterHouseholdsState.unsubmittedParticipantIds.sort()).toEqual([playerA.id, playerB.id].sort());
+
+    const ackA = await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenA);
+    expect(ackA.status).toBe(200);
+
+    const afterAckA = await getJson(`/api/sessions/${sessionId}/state`);
+    const afterAckAState = (afterAckA.body as { state: { currentPhase: string; currentRound: number } }).state;
+    // Only one of two players acknowledged so far — still stuck at round 1's round-result.
+    expect(afterAckAState.currentPhase).toBe("round-result");
+    expect(afterAckAState.currentRound).toBe(1);
+
+    const ackB = await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenB);
+    expect(ackB.status).toBe(200);
+
+    const final = await getJson(`/api/sessions/${sessionId}/state`);
+    const finalState = final.body as {
+      state: { currentPhase: string; currentRound: number; roundMetrics: unknown[] };
+      unsubmittedParticipantIds: string[];
+      gameOver: boolean;
+    };
+    // Both acknowledged — now it actually drains to round 2's company-turn.
+    expect(finalState.state.roundMetrics).toHaveLength(1);
+    expect(finalState.state.currentPhase).toBe("company-turn");
+    expect(finalState.state.currentRound).toBe(2);
+    expect(finalState.gameOver).toBe(false);
+    expect(finalState.unsubmittedParticipantIds.sort()).toEqual([playerA.companyId, playerB.companyId].sort());
   });
 
   it("rejects a submission with no token and an unknown-session request with 404", async () => {
@@ -167,12 +200,15 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
 
   it("handles two participants submitting genuinely concurrently over real TCP without duplicate or lost settlement (Milestone 4 3단계)", async () => {
     const created = await postJson("/api/sessions", { studentCount: 2, rngSeed: 11 });
-    const { sessionId } = created.body as { sessionId: string };
+    const { sessionId, teacherToken } = created.body as { sessionId: string; teacherToken: string };
 
     const joinA = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-1" });
     const joinB = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-2" });
     const { token: tokenA, player: playerA } = joinA.body as JoinResult;
     const { token: tokenB, player: playerB } = joinB.body as JoinResult;
+
+    // Milestone 4 4단계 (D-030): close the lobby immediately, this test isn't exercising it.
+    await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken);
 
     // Fire both submissions at the same time (Promise.all) instead of sequentially, to exercise
     // whatever concurrency exists in the real Node event loop/TCP stack.
@@ -227,6 +263,23 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     expect(submitHouseholdA.status).toBe(200);
     expect(submitHouseholdB.status).toBe(200);
 
+    const afterHouseholds = await getJson(`/api/sessions/${sessionId}/state`);
+    const afterHouseholdsState = (
+      afterHouseholds.body as { state: { roundMetrics: unknown[]; currentPhase: string; currentRound: number } }
+    ).state;
+    // Settlement happened exactly once, but the game now waits at round-result for both players
+    // to acknowledge (D-030) before round 2 begins.
+    expect(afterHouseholdsState.roundMetrics).toHaveLength(1);
+    expect(afterHouseholdsState.currentPhase).toBe("round-result");
+    expect(afterHouseholdsState.currentRound).toBe(1);
+
+    await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenA);
+    const afterOneAck = await getJson(`/api/sessions/${sessionId}/state`);
+    const afterOneAckState = (afterOneAck.body as { state: { currentPhase: string; currentRound: number } }).state;
+    expect(afterOneAckState.currentPhase).toBe("round-result");
+    expect(afterOneAckState.currentRound).toBe(1);
+
+    await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenB);
     const final = await getJson(`/api/sessions/${sessionId}/state`);
     const finalState = (final.body as { state: { roundMetrics: unknown[]; currentRound: number } }).state;
     expect(finalState.roundMetrics).toHaveLength(1);

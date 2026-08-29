@@ -13,6 +13,7 @@ const PARTICIPANT_ID_FIELD_BY_PHASE: Partial<Record<RoundPhase, keyof PlayerSlot
   "company-turn": "companyId",
   "store-turn": "storeId",
   "household-turn": "householdId",
+  "round-result": "playerId",
 };
 
 export interface UnsubmittedParticipant {

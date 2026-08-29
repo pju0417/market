@@ -7,6 +7,7 @@
  * 기반으로 미리 만들어 둔다.
  */
 import type { GameState, ParticipantId } from "../../types/domain.js";
+import type { BusinessSetupChoices } from "../../multiplayer/GameSession.js";
 
 export interface CreateSessionResult {
   sessionId: string;
@@ -32,6 +33,7 @@ export interface StateResult {
   state: GameState;
   unsubmittedParticipantIds: ParticipantId[];
   gameOver: boolean;
+  lobby: { open: boolean; unsubmittedPlayerIds: string[] };
 }
 
 export type PollResult = StateResult | { unchanged: true };
@@ -66,7 +68,12 @@ export class ApiError extends Error {
 export class SessionClient {
   constructor(
     private readonly baseUrl: string = "",
-    private readonly fetchImpl: FetchLike = fetch,
+    // 기본값은 반드시 globalThis에 바인딩해야 한다 — `this.fetchImpl(...)`로 메서드 호출하듯
+    // 부르면 네이티브 fetch는 자신의 realm(window/globalThis)이 아닌 `this`(SessionClient
+    // 인스턴스)로 호출된 것으로 보고 "Illegal invocation"을 던진다(주입 가능한 fake fetch를
+    // 쓰는 테스트는 `this` 바인딩을 신경 쓰지 않아 이 버그를 못 잡는다 — 실제 브라우저에서만
+    // 재현됨).
+    private readonly fetchImpl: FetchLike = globalThis.fetch.bind(globalThis),
   ) {}
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -142,6 +149,31 @@ export class SessionClient {
     return this.request(`/api/sessions/${sessionId}/force-advance`, {
       method: "POST",
       headers: { authorization: `Bearer ${teacherToken}` },
+    });
+  }
+
+  /** 창업 준비(상권/업종 선택) 제출. 로비가 이미 닫혀 있으면 서버가 400을 반환한다 (D-030). */
+  setupBusinessChoices(sessionId: string, token: string, choices: BusinessSetupChoices): Promise<{ ok: true }> {
+    return this.request(`/api/sessions/${sessionId}/setup`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(choices),
+    });
+  }
+
+  /** 교사 전용 로비 닫기. `teacherToken`은 세션 생성 응답에서만 받을 수 있다 (D-029). */
+  closeLobby(sessionId: string, teacherToken: string): Promise<{ ok: true }> {
+    return this.request(`/api/sessions/${sessionId}/close-lobby`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${teacherToken}` },
+    });
+  }
+
+  /** 라운드 결과 확인(ack). 전원이 확인해야 다음 라운드로 넘어간다 (D-030). */
+  acknowledgeRoundResult(sessionId: string, token: string): Promise<{ ok: true }> {
+    return this.request(`/api/sessions/${sessionId}/acknowledge-round-result`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
     });
   }
 }
