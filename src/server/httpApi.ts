@@ -8,7 +8,8 @@
  * 응답의 상태 코드는 REST 관례를 최소한으로만 따른다(200/201/400/401/403/404) — 이 프로젝트의
  * 목적상 그 이상의 세밀한 HTTP 시맨틱은 불필요하다.
  */
-import { createSession, getSession } from "./sessionRegistry.js";
+import { createSession, getSession, syncPhaseTimer, type SessionEntry } from "./sessionRegistry.js";
+import { DEFAULT_SUBMISSION_TIMEOUT_MS } from "./timeoutConfig.js";
 import type {
   CompanyDecisionInput,
   PurchaseRequestLine,
@@ -79,6 +80,11 @@ export async function handleApiRequest(request: ApiRequest): Promise<ApiResponse
     return handleState(sessionId, request.query);
   }
 
+  if (segments.length === 4 && segments[3] === "force-advance") {
+    if (request.method !== "POST") return notFound();
+    return handleForceAdvance(sessionId, request.headers);
+  }
+
   if (segments.length === 5 && segments[3] === "submit") {
     const role = segments[4];
     if (request.method !== "POST") return notFound();
@@ -96,8 +102,10 @@ function handleCreateSession(body: unknown): ApiResponse {
     return badRequest("studentCount must be a positive integer");
   }
   const rngSeed = typeof body.rngSeed === "number" ? body.rngSeed : undefined;
-  const { sessionId } = createSession(body.studentCount, rngSeed);
-  return { status: 201, body: { sessionId } };
+  const { sessionId, entry } = createSession(body.studentCount, rngSeed);
+  // teacherToken은 세션 생성 응답에만 실린다 — 다른 어떤 라우트(GET /slots 등)도 이 값을
+  // 다시 노출하지 않는다 (D-029, 무인증 라우트로의 유출 방지).
+  return { status: 201, body: { sessionId, teacherToken: entry.teacherToken } };
 }
 
 function handleSlots(sessionId: string): ApiResponse {
@@ -134,10 +142,17 @@ function handleJoin(sessionId: string, body: unknown): ApiResponse {
  * 반환하는 `GameState`에는 애초에 미확정 제출값이 담기지 않고(phase가 실제로 실행된 뒤의
  * 확정 상태만), `getUnsubmittedParticipantIds()`도 "누가 아직 제출 안 했는지"만 참가자 id로
  * 알려줄 뿐 내용은 노출하지 않는다.
+ *
+ * 순서 주의(D-029): 타임아웃 체크를 반드시 `since` 버전 비교보다 먼저 해야 한다. 만약
+ * `since === 현재버전`일 때 즉시 `{unchanged:true}`를 반환하는 빠른 경로가 먼저 실행되면,
+ * 아무도 새로 제출하지 않아 버전이 그대로인 세션은 영원히 `{unchanged:true}`만 반환하게 되어
+ * 타임아웃이 절대 발동하지 않는다.
  */
-function handleState(sessionId: string, query: Readonly<Record<string, string>>): ApiResponse {
+async function handleState(sessionId: string, query: Readonly<Record<string, string>>): Promise<ApiResponse> {
   const entry = getSession(sessionId);
   if (!entry) return notFound("unknown sessionId");
+
+  await checkAndApplyTimeout(entry);
 
   const version = entry.session.getVersion();
   const sinceRaw = query.since;
@@ -158,6 +173,50 @@ function handleState(sessionId: string, query: Readonly<Record<string, string>>)
       gameOver: state.currentRound > state.config.totalRounds,
     },
   };
+}
+
+/**
+ * 현재 phase의 제출 마감(`phaseStartedAt + DEFAULT_SUBMISSION_TIMEOUT_MS`)이 지났고 아직
+ * 사람 입력을 기다리는 중이면, 막힌 phase를 강제로 뚫은 뒤(`advancePhase(true)`) 사람 입력이
+ * 필요 없는 이어지는 phase들을 조용히 드레인한다(`advanceUntilInputRequired(false)`). 이
+ * 정확한 순서를 지키지 않으면 "막혀서 대기 중인 phase에는 force가 적용되지 않는" 함정에
+ * 걸린다 (`GameSession.advanceUntilInputRequired`의 while 조건 참고, D-029).
+ */
+async function checkAndApplyTimeout(entry: SessionEntry): Promise<void> {
+  syncPhaseTimer(entry);
+  const deadline = entry.phaseStartedAt + DEFAULT_SUBMISSION_TIMEOUT_MS;
+  if (Date.now() >= deadline && entry.session.isWaitingForHumanInput()) {
+    await entry.session.advancePhase(true);
+    await entry.session.advanceUntilInputRequired(false);
+    syncPhaseTimer(entry);
+  }
+}
+
+function handleForceAdvance(sessionId: string, headers: Readonly<Record<string, string | undefined>>): Promise<ApiResponse> {
+  const entry = getSession(sessionId);
+  if (!entry) return Promise.resolve(notFound("unknown sessionId"));
+
+  const token = extractBearerToken(headers);
+  if (token === undefined || token !== entry.teacherToken) {
+    return Promise.resolve(unauthorized("missing or invalid teacher token"));
+  }
+
+  return doForceAdvance(entry);
+}
+
+async function doForceAdvance(entry: SessionEntry): Promise<ApiResponse> {
+  const state = entry.session.getState();
+  if (state.currentRound > state.config.totalRounds) {
+    // 게임이 이미 끝난 세션에 강제진행을 요청하는 것은 오류라기보다는 "할 일이 없는" 상태다 —
+    // 폴링/버튼 재클릭 등으로 뒤늦게 도착한 요청을 조용히 no-op으로 처리한다(D-029).
+    return { status: 200, body: { ok: true, gameOver: true } };
+  }
+
+  await entry.session.advancePhase(true);
+  await entry.session.advanceUntilInputRequired(false);
+  syncPhaseTimer(entry);
+
+  return { status: 200, body: { ok: true } };
 }
 
 function extractBearerToken(headers: Readonly<Record<string, string | undefined>>): string | undefined {
@@ -237,6 +296,10 @@ async function handleSubmit(
   }
 
   await entry.session.advanceUntilInputRequired(false);
+  // phase가 실제로 넘어갔다면(전원 제출 완료 등) 새 phase의 타이머를 시작한다. 이 제출
+  // 하나만으로는 phase가 안 바뀌는 게 보통이므로(다른 참가자가 아직 남음), 그 경우
+  // `syncPhaseTimer`는 아무것도 하지 않는다 — 즉 부분 제출은 마감시각을 리셋하지 않는다(D-029).
+  syncPhaseTimer(entry);
 
   return { status: 200, body: { ok: true } };
 }

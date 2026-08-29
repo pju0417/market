@@ -164,4 +164,72 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     const unknownSession = await getJson(`/api/sessions/does-not-exist/state`);
     expect(unknownSession.status).toBe(404);
   });
+
+  it("handles two participants submitting genuinely concurrently over real TCP without duplicate or lost settlement (Milestone 4 3단계)", async () => {
+    const created = await postJson("/api/sessions", { studentCount: 2, rngSeed: 11 });
+    const { sessionId } = created.body as { sessionId: string };
+
+    const joinA = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-1" });
+    const joinB = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-2" });
+    const { token: tokenA, player: playerA } = joinA.body as JoinResult;
+    const { token: tokenB, player: playerB } = joinB.body as JoinResult;
+
+    // Fire both submissions at the same time (Promise.all) instead of sequentially, to exercise
+    // whatever concurrency exists in the real Node event loop/TCP stack.
+    const [submitA, submitB] = await Promise.all([
+      postJson(
+        `/api/sessions/${sessionId}/submit/company`,
+        { companyId: playerA.companyId, input: { quantity: 12, quality: 0.6, wholesalePrice: 9 } },
+        tokenA,
+      ),
+      postJson(
+        `/api/sessions/${sessionId}/submit/company`,
+        { companyId: playerB.companyId, input: { quantity: 10, quality: 0.5, wholesalePrice: 7 } },
+        tokenB,
+      ),
+    ]);
+    expect(submitA.status).toBe(200);
+    expect(submitB.status).toBe(200);
+
+    const afterBoth = await getJson(`/api/sessions/${sessionId}/state`);
+    const state = (
+      afterBoth.body as {
+        state: { currentPhase: string; wholesaleListings: Array<{ companyId: string; price: number; quantityAvailable: number }> };
+      }
+    ).state;
+    // Neither submission was lost, and the phase advanced exactly once (not stuck, not double
+    // advanced past store-turn) — both companies' listings must be present with their own values.
+    expect(state.currentPhase).toBe("store-turn");
+    const listingA = state.wholesaleListings.find((listing) => listing.companyId === playerA.companyId);
+    const listingB = state.wholesaleListings.find((listing) => listing.companyId === playerB.companyId);
+    expect(listingA).toMatchObject({ price: 9, quantityAvailable: 12 });
+    expect(listingB).toMatchObject({ price: 7, quantityAvailable: 10 });
+
+    // No duplicate settlement: continue through store/household turns and confirm exactly one
+    // round of metrics was recorded, not two (which would indicate a double-run phase).
+    const submitStoreA = await postJson(
+      `/api/sessions/${sessionId}/submit/store`,
+      { storeId: playerA.storeId, input: { purchases: [], retailPrice: 15 } },
+      tokenA,
+    );
+    const submitStoreB = await postJson(
+      `/api/sessions/${sessionId}/submit/store`,
+      { storeId: playerB.storeId, input: { purchases: [], retailPrice: 15 } },
+      tokenB,
+    );
+    expect(submitStoreA.status).toBe(200);
+    expect(submitStoreB.status).toBe(200);
+
+    const [submitHouseholdA, submitHouseholdB] = await Promise.all([
+      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerA.householdId, lines: [] }, tokenA),
+      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerB.householdId, lines: [] }, tokenB),
+    ]);
+    expect(submitHouseholdA.status).toBe(200);
+    expect(submitHouseholdB.status).toBe(200);
+
+    const final = await getJson(`/api/sessions/${sessionId}/state`);
+    const finalState = (final.body as { state: { roundMetrics: unknown[]; currentRound: number } }).state;
+    expect(finalState.roundMetrics).toHaveLength(1);
+    expect(finalState.currentRound).toBe(2);
+  });
 });

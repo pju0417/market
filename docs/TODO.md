@@ -453,9 +453,72 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
         자동 드레인(`advanceUntilInputRequired`) 중 예외가 나면 클라이언트에 일반 500이
         내려간다(데이터 손실은 없음 — 제출은 이미 반영된 뒤라, UX상 에러 메시지가 다소
         불친절할 수 있다는 진단 편의성 관찰일 뿐).
-- [ ] 3단계: 제출 타임아웃, "누가 아직 제출 안 했는지" 보여주는 UI, 담합 방지(제출 마감
-      전까지 다른 참가자의 제출 내용을 노출하지 않는 것은 이미 지키고 있음 — 이 단계는 그
-      원칙이 실제 여러 기기 환경에서도 깨지지 않는지 확인하고 타임아웃 정책을 추가하는 것).
+- [x] **3단계: 제출 타임아웃, "누가 아직 제출 안 했는지" 보여주는 UI(확인용), 담합 방지
+      재검증** — D-029에서 확정한 대로 타임아웃/강제진행/제출현황은 서버 로직
+      (`src/server/`)에만 구현했고, 확인용 클라이언트도 기존 로컬 1인 플레이 경로
+      (App.tsx/useGameSession.ts/세 턴 화면)와 완전히 분리된 신규 파일로만 추가했다 — 그
+      경로는 한 글자도 안 바꿨다.
+      - `src/server/timeoutConfig.ts` 신규: `DEFAULT_SUBMISSION_TIMEOUT_MS = 120_000`
+        (v1 잠정값, 경제 밸런스가 아닌 진행 리듬 값이라 `economy/config.ts`가 아닌 서버
+        계층 자체 파일에 둠).
+      - `src/server/sessionRegistry.ts`의 `SessionEntry`에 `teacherToken`(세션 생성 시
+        1회 발급)·`phaseStartedAt`·`lastObservedPhase` 필드와 헬퍼
+        `syncPhaseTimer(entry)`(phase가 실제로 바뀌었을 때만 타이머 리셋 — 부분 제출로는
+        리셋되지 않음, 반복 제출로 다른 참가자의 타임아웃을 늦추는 것을 방지) 추가.
+      - `src/server/httpApi.ts`: `POST /api/sessions` 응답에 `teacherToken`을 1회만 포함
+        (다른 라우트에는 절대 노출 안 됨), `POST /api/sessions/:id/force-advance` 신규
+        (교사 토큰 불일치/누락 401, 게임 종료 후 no-op 200 `{ok:true, gameOver:true}`),
+        `handleState`를 async로 바꿔 `since` 버전 비교보다 **먼저** 타임아웃 체크
+        (`checkAndApplyTimeout`: `syncPhaseTimer` → 마감 경과+대기 중이면
+        `advancePhase(true)` → `advanceUntilInputRequired(false)` → `syncPhaseTimer`
+        재동기화)를 실행하도록 순서를 고정(순서를 반대로 하면 아무도 제출 안 하는 세션은
+        `since`가 항상 현재버전과 같아 영원히 `{unchanged:true}`만 반환해 타임아웃이 절대
+        발동하지 않는 함정을 architect가 사전에 지적한 그대로 재현할 뻔했음). `handleSubmit`도
+        제출 반영 후 `syncPhaseTimer(entry)`를 추가로 호출.
+      - 강제진행은 두 지점(자동 타임아웃, 교사 수동 강제진행) 모두 architect가 지정한 순서
+        (`advancePhase(true)` → `advanceUntilInputRequired(false)`)를 그대로 따랐다 — "이미
+        막혀서 대기 중인 phase에는 force가 적용 안 되는" `advanceUntilInputRequired`의 while
+        조건 함정을 피하기 위함.
+      - 확인용 클라이언트(신규, 전부 미배선): `src/ui/network/sessionClient.ts`(fetch 주입
+        가능한 얇은 래퍼), `src/ui/network/submissionStatus.ts`(순수 함수
+        `computeUnsubmittedParticipants`), `src/ui/screens/NetworkSessionMonitor.tsx`(현재
+        phase·제출 현황·남은 시간(추정)·교사 토큰이 있을 때만 보이는 "지금 진행" 버튼 —
+        4단계에서 재사용 예정이라는 주석만 남기고 `App.tsx` 등에는 배선하지 않음). 토큰은
+        `sessionStorage`에 저장(`localStorage` 아님, 탭 간 공유 방지 및
+        `LocalStorageAdapter` 고정 키와 충돌 방지).
+      - 검증: `tests/server/httpApi.test.ts`에 `vi.useFakeTimers()` 기반 신규 테스트 7개
+        (teacherToken 발급/무유출, 플레이어 토큰 force-advance 401·교사 토큰 200,
+        force-advance가 미제출 company-turn을 봇 폴백으로 실제로 store-turn까지 뚫는지,
+        게임 종료 후 force-advance no-op 200, **순서 버그 회귀 테스트**(폴링 클라이언트가
+        `since=자신이 아는 버전`을 마감 경과 후에도 계속 보내도 자동 강제진행된 새 상태가
+        반환됨), 마감 직전 실제 제출값이 봇 값이 아니라 사람이 제출한 값 그대로 도매매물에
+        반영되는지, 부분 제출·재제출이 `phaseStartedAt`을 리셋하지 않는지).
+        `tests/server/integration.test.ts`에 실제 TCP 서버 + `Promise.all`로 두 참가자의
+        기업 턴 제출을 동시에 보내는 동시성 테스트 1개 추가(유실·중복 정산 없음, 라운드
+        1이 정확히 1건만 정산). 신규 `tests/ui/submissionStatus.test.ts`(DOM 없는 순수
+        함수 테스트 5개). 전체 293개 테스트(기존 280 + 신규 13: httpApi 7 + integration 1 +
+        submissionStatus 5) 통과, `npm run typecheck`(양쪽 tsconfig)·
+        `npm run lint -- --max-warnings=0`·`npm run build`(65 모듈, 신규 UI 파일이 번들에
+        섞이지 않음, 어디서도 import 안 됨을 확인) 모두 클린. `src/engine`/`src/economy`/
+        `src/npc`/`src/advisor`/`GameSession.ts`는 `git diff`로 무변경 확인 —
+        기존 `advancePhase`/`advanceUntilInputRequired`/`isWaitingForHumanInput`/
+        `getUnsubmittedParticipantIds`만으로 충분해 `GameSession`에 새 메서드를 추가할
+        필요가 없었다. 상세 근거는 docs/DECISIONS.md D-029,
+        docs/MULTIPLAYER_DESIGN.md "구현 상태 (Milestone 4 3단계)" 참고.
+      - code-reviewer 재검증(직접 명령 실행 + git diff/코드 추적, 눈으로만 안 봄): 위 4개
+        명령 재실행 통과 확인(`.only`/`.skip` 없음, 293개 전부 실제로 실행됨도 확인). architect가
+        사전에 지적한 9가지 위험 지점(강제진행 호출 순서, 폴링 순서 버그, 타이머 리셋 오남용,
+        teacherToken 비노출, force-advance 권한, 담합 방지 회귀, 동시성, 범위 위반 여부,
+        sessionStorage 사용) 전부 코드 추적으로 실제 처리됨을 확인 — blocking 이슈 없음.
+        비차단 관찰 2건(둘 다 이번 범위에서 고치지 않음): (1) 자동 타임아웃은 서버에 별도
+        백그라운드 타이머(`setInterval` 등)가 없어 `GET /state` 폴링 요청이 실제로 들어와야만
+        발동한다 — 지금의 Map 기반 프로토타입 서버 구조상 자연스러운 특성이지 회귀는 아니지만,
+        향후 폴러가 전혀 없는 상황에서도 타임아웃이 발동해야 한다고 가정하는 단계가 생기면
+        재검토 필요. (2) 어떤 참가자의 제출이 마침 그 phase의 타임아웃/강제진행 처리와 정확히
+        같은 순간에 도착하면 조용히 유실/덮어써지지 않고 명확한 400("Cannot advance/submit
+        while current phase is ...")으로 거부된다 — 데이터 손실은 아니고 정상 동작이지만,
+        나중에 실제 제출 UI를 배선하는 단계에서 이 상황을 "너무 늦었습니다" 같은 사용자 친화적
+        메시지로 다듬을 가치가 있다는 UX 참고 사항으로만 기록.
 - [ ] 4단계: 다인원 로비 — 여러 학생 각자의 창업 준비(상권/업종 선택)를 받는 화면.
       `BusinessSetupChoices`를 다인원용으로 확장하는 설계가 이 단계에서 필요하다.
       (선행 조건이었던 D-026 해결책 확정은 아래 항목대로 이미 완료됨.)

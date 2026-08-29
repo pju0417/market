@@ -1,0 +1,150 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SessionClient, type FetchLike, type PlayerSlot, type StateResult } from "../network/sessionClient.js";
+import { computeUnsubmittedParticipants } from "../network/submissionStatus.js";
+import { PHASE_LABELS } from "../labels.js";
+import { DEFAULT_SUBMISSION_TIMEOUT_MS } from "../../server/timeoutConfig.js";
+
+/**
+ * Milestone 4 3단계("제출 타임아웃, 제출현황 UI, 담합 방지 재검증") 확인용 최소 컴포넌트다.
+ *
+ * 중요: 기존 로컬 1인 플레이 경로(App.tsx, useGameSession.ts, CompanyTurnScreen/
+ * StoreTurnScreen/HouseholdTurnScreen)와 완전히 분리되어 있고, 이번 단계에서는 그 화면들에
+ * 배선하지 않는다 — 다인원 로비(Milestone 4 4단계)에서 이 컴포넌트를 재사용할 예정이다
+ * (docs/DECISIONS.md D-029).
+ *
+ * 교사 토큰은 `sessionStorage`에 저장한다(`localStorage`가 아님 — 탭 간 세션/토큰 공유를
+ * 막고, `LocalStorageAdapter`가 쓰는 고정 키와 충돌하지 않기 위함).
+ */
+
+const POLL_INTERVAL_MS = 3_000;
+const CLOCK_TICK_MS = 1_000;
+
+function teacherTokenStorageKey(sessionId: string): string {
+  return `economy-game:network-monitor:teacher-token:${sessionId}`;
+}
+
+/** 4단계에서 join 직후 교사 토큰을 저장할 때 재사용할 수 있도록 export한다. */
+export function storeTeacherToken(sessionId: string, teacherToken: string): void {
+  window.sessionStorage.setItem(teacherTokenStorageKey(sessionId), teacherToken);
+}
+
+function loadTeacherToken(sessionId: string): string | undefined {
+  return window.sessionStorage.getItem(teacherTokenStorageKey(sessionId)) ?? undefined;
+}
+
+interface Props {
+  sessionId: string;
+  baseUrl?: string;
+  fetchImpl?: FetchLike;
+}
+
+export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Props) {
+  const client = useMemo(() => new SessionClient(baseUrl, fetchImpl), [baseUrl, fetchImpl]);
+  const [slots, setSlots] = useState<PlayerSlot[]>([]);
+  const [stateResult, setStateResult] = useState<StateResult | undefined>(undefined);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [teacherToken] = useState<string | undefined>(() => loadTeacherToken(sessionId));
+  // 서버는 phase 시작 시각을 API로 노출하지 않으므로, 이 값은 "이 화면이 phase 전환을 처음
+  // 관찰한 시각" 기준의 추정치다 — 실제 타임아웃 판정은 서버(`sessionRegistry.syncPhaseTimer`)
+  // 가 별도로 하고, 이 카운트다운은 참고용 표시일 뿐이다.
+  const phaseObservedAtRef = useRef<{ phase: string; observedAt: number } | undefined>(undefined);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .getSlots(sessionId)
+      .then((result) => {
+        if (!cancelled) setSlots(result);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let sinceVersion: number | undefined;
+
+    async function poll(): Promise<void> {
+      try {
+        const result = await client.getState(sessionId, sinceVersion);
+        if (cancelled) return;
+        if (!("unchanged" in result)) {
+          sinceVersion = result.version;
+          setStateResult(result);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    void poll();
+    const interval = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [client, sessionId]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const currentPhase = stateResult?.state.currentPhase;
+  if (currentPhase !== undefined && phaseObservedAtRef.current?.phase !== currentPhase) {
+    phaseObservedAtRef.current = { phase: currentPhase, observedAt: Date.now() };
+  }
+
+  const remainingMs = phaseObservedAtRef.current
+    ? Math.max(0, DEFAULT_SUBMISSION_TIMEOUT_MS - (now - phaseObservedAtRef.current.observedAt))
+    : undefined;
+
+  const unsubmitted = stateResult
+    ? computeUnsubmittedParticipants(slots, stateResult.unsubmittedParticipantIds, stateResult.state.currentPhase)
+    : [];
+
+  async function handleForceAdvance(): Promise<void> {
+    if (!teacherToken) return;
+    try {
+      await client.forceAdvance(sessionId, teacherToken);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>네트워크 세션 모니터 (확인용)</h2>
+      {error && <p className="empty-note">{error}</p>}
+      {!stateResult ? (
+        <p className="empty-note">상태를 불러오는 중...</p>
+      ) : (
+        <>
+          <p>
+            현재 단계: <strong>{PHASE_LABELS[stateResult.state.currentPhase]}</strong> ({stateResult.state.currentRound}
+            라운드)
+          </p>
+          {remainingMs !== undefined && <p>남은 시간(추정): {Math.ceil(remainingMs / 1000)}초</p>}
+          <p>
+            제출 현황:{" "}
+            {stateResult.gameOver
+              ? "게임 종료"
+              : unsubmitted.length === 0
+                ? "전원 제출 완료"
+                : `미제출 ${unsubmitted.length}명 (${unsubmitted.map((p) => p.displayName).join(", ")})`}
+          </p>
+          {teacherToken && !stateResult.gameOver && (
+            <button className="secondary" onClick={() => void handleForceAdvance()}>
+              지금 진행
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

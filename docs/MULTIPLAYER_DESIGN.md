@@ -115,3 +115,65 @@ Promise<ApiResponse>`이고, Node 전용 배관(JSON body 스트림 읽기, URL 
 실제 네트워크 호출로 바꾸는 작업(async 전환, 원격 세션을 구독하는 클라이언트 훅)은 의도적으로
 이번 범위에 넣지 않았다 — 4단계(다인원 로비)와 함께 다룬다. 상세 검증 수치는
 docs/TODO.md Milestone 4 2단계 항목, 로드맵 결정 배경은 docs/DECISIONS.md D-028 참고.
+
+## 구현 상태 (Milestone 4 3단계)
+
+D-029에서 확정한 대로 **타임아웃/강제진행/제출현황은 서버 로직(`src/server/`)에만
+구현**했고, 확인용 클라이언트도 기존 로컬 1인 플레이 경로(App.tsx, useGameSession.ts,
+CompanyTurnScreen/StoreTurnScreen/HouseholdTurnScreen)와 완전히 분리된 별도 파일로만
+추가했다 — 그 로컬 경로는 이번에도 한 글자도 바꾸지 않았다.
+
+**제출 타임아웃 (하이브리드 정책, D-029 C안)**: `src/server/timeoutConfig.ts`의
+`DEFAULT_SUBMISSION_TIMEOUT_MS`(120초, v1 잠정값)가 지나면, 그 다음 `GET /state` 폴링
+응답을 만들기 **전에** 서버가 자동으로 미제출 phase를 봇 폴백 경로로 강제진행한다.
+`src/server/sessionRegistry.ts`의 `SessionEntry`에 `phaseStartedAt`/`lastObservedPhase`를
+추가하고, 헬퍼 `syncPhaseTimer(entry)`가 "phase가 실제로 바뀌었을 때만" 타이머를 리셋한다
+— 부분 제출(`submitCompanyDecision` 등)은 phase를 바꾸지 않으므로 반복 제출로 다른
+참가자의 타임아웃을 늦출 수 없다(회귀 테스트로 고정).
+
+강제진행 구현은 architect가 사전에 지적한 함정(`GameSession.advanceUntilInputRequired(force)`가
+"이미 막혀서 대기 중인 phase" 자체에는 force를 적용하지 않는 while 조건)을 피하기 위해
+반드시 `advancePhase(true)`(막힌 phase를 뚫음) → `advanceUntilInputRequired(false)`(그
+다음 조용한 phase들을 드레인) 순서로 호출한다 — 이 두 곳(자동 타임아웃, 아래 수동
+강제진행)에서 모두 같은 순서를 지켰다.
+
+**순서 버그 방지(가장 중요한 회귀 지점)**: `handleState`는 `since` 버전 비교보다
+**먼저** 타임아웃 체크를 실행해야 한다. 반대 순서면 아무도 새로 제출하지 않는 세션은
+클라이언트가 보낸 `since`가 항상 서버의 현재 버전과 같아 매번 `{unchanged:true}`
+빠른 경로로 즉시 반환되어 타임아웃 체크 자체가 실행되지 않는다 — 즉 "폴링은 계속 오는데
+아무도 제출을 안 하면 영원히 멈춰 있는" 조용한 버그가 된다. `tests/server/httpApi.test.ts`에
+`vi.useFakeTimers()`로 이 정확한 시나리오(클라이언트가 `since=자신이 이미 아는 버전`을
+마감 경과 후에도 계속 보냄)를 고정하는 회귀 테스트를 추가했다.
+
+**교사 수동 강제진행**: 세션 생성(`POST /api/sessions`) 응답에 `teacherToken`을 딱 한 번
+포함한다 — `GET /slots` 등 다른 어떤 라우트도 이 값을 다시 노출하지 않는다(회귀 테스트로
+직접 확인). `POST /api/sessions/:id/force-advance`는 `Authorization: Bearer
+<teacherToken>`이 정확히 일치해야 하고(불일치·누락·참가자 토큰으로 시도 401), 게임이
+이미 끝났으면 오류가 아니라 no-op `200 {ok:true, gameOver:true}`를 반환한다(폴링/버튼
+재클릭으로 뒤늦게 도착한 요청을 사용자에게 에러로 보여주지 않기 위한 선택).
+
+**확인용 클라이언트(프로덕션 화면과 무관)**: `src/ui/network/sessionClient.ts`(`fetch`를
+주입받는 얇은 래퍼, DOM 비의존), `src/ui/network/submissionStatus.ts`(순수 함수
+`computeUnsubmittedParticipants` — `GET /slots`와 `GET /state`의
+`unsubmittedParticipantIds`+현재 phase를 조합해 "아직 제출 안 한 참가자" 목록을 계산),
+`src/ui/screens/NetworkSessionMonitor.tsx`(현재 phase, 제출 현황, 남은 시간(추정 —
+서버가 마감시각 자체를 API로 노출하지 않으므로 이 화면이 phase 전환을 처음 관찰한 시각
+기준의 참고용 표시일 뿐이고, 실제 타임아웃 판정은 서버의 `phaseStartedAt`이 독립적으로
+한다), 교사 토큰이 있을 때만 보이는 "지금 진행" 버튼). 이번 단계는 이 컴포넌트를 만들기만
+하고 `App.tsx`/`useGameSession.ts`/세 턴 화면에는 배선하지 않았다 — Milestone 4 4단계
+(다인원 로비)에서 재사용할 예정이다. 교사 토큰은 `sessionStorage`에 저장한다
+(`localStorage`가 아님 — 탭 간 세션/토큰 공유를 막고, `LocalStorageAdapter`가 쓰는 고정
+키와 충돌하지 않기 위함).
+
+검증: `tests/server/httpApi.test.ts`에 `vi.useFakeTimers()` 기반 신규 테스트 7개(teacherToken
+발급/무유출, 플레이어 토큰 force-advance 401, force-advance가 미제출 phase를 실제로
+넘기는지, 게임 종료 후 no-op, 순서 버그 회귀, 마감 직전 실제 제출값이 봇 값으로 덮이지
+않는지, 부분 제출이 타이머를 리셋하지 않는지), `tests/server/integration.test.ts`에 실제
+TCP + `Promise.all` 동시 제출 테스트 1개(중복 정산·유실 없음), 신규
+`tests/ui/submissionStatus.test.ts`(DOM 없는 순수 함수 테스트 5개). 전체 293개 테스트
+(기존 280 + 신규 13) 통과, `npm run typecheck`(양쪽 tsconfig)·`npm run lint --
+--max-warnings=0`·`npm run build`(65 모듈, 신규 UI 파일이 번들에 섞이지 않음) 모두 클린.
+`src/engine`/`src/economy`/`src/npc`/`src/advisor`/`GameSession.ts`는 무변경(`git diff`로
+확인) — 기존 `advancePhase`/`advanceUntilInputRequired`/`isWaitingForHumanInput`/
+`getUnsubmittedParticipantIds`만으로 충분해 `GameSession`에 새 메서드를 추가하지 않았다.
+상세 근거는 docs/DECISIONS.md D-029 참고.
