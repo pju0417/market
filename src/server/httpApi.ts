@@ -271,17 +271,21 @@ async function doForceAdvance(entry: SessionEntry): Promise<ApiResponse> {
     return { status: 200, body: { ok: true, gameOver: true } };
   }
 
-  // 로비(창업 준비)가 아직 열려있으면 먼저 닫는다 (code-reviewer 발견 버그): 이 가드가 없으면
-  // "지금 진행"이 아직 /setup을 못 낸 학생의 회사/가게를 로비 화면은 여전히 "열려있음"으로
-  // 보여주는 채로 엔진 기본값째 company-turn을 실행시켜버리고, 그 학생은 이후
-  // applyBusinessSetupChoices가 "라운드 1 기업 턴 실행 후"라는 이유로 영구히 거부한다.
-  // 교사가 명시적으로 "지금 진행"을 눌렀다는 것 자체가 "더 기다리지 않고 넘어가겠다"는
-  // 의사이므로, `/close-lobby`를 누른 것과 같은 효과(로비를 닫고 제출 시계를 새로 시작)를
-  // 먼저 적용한 뒤 강제진행을 이어간다.
-  if (isLobbyOpen(entry)) {
-    entry.lobbyClosedByTeacher = true;
-    if (markLobbyClosedIfNeeded(entry)) entry.session.bumpVersion();
-  }
+  // 로비(창업 준비)가 아직 안 닫혔으면 먼저 닫는다 (code-reviewer 1차 발견 버그 + 2차 리뷰에서
+  // 재발견된 순서 결함 수정): 처음엔 `if (isLobbyOpen(entry))`로 게이트를 걸었는데, 이게
+  // 틀렸다 — 로비의 벽시계 타임아웃(180초)이 이미 지났지만 아직 아무 폴링도 안 들어와
+  // `markLobbyClosedIfNeeded`가 한 번도 안 불린 상태에서는 `isLobbyOpen(entry)`가 이미
+  // `false`를 반환해버린다(순수 `Date.now()` 비교라서). 그러면 이 블록 전체를 건너뛰고
+  // `finalizeLobbyMembership` 없이 곧바로 `advancePhase(true)`가 company-turn을 실행시켜
+  // 버리고, 그 뒤 처음 들어오는 폴링이 `checkAndApplyTimeout`을 통해 뒤늦게
+  // `markLobbyClosedIfNeeded`를 호출하면 이미 company-turn을 지나친 뒤라
+  // `finalizeLobbyMembership`의 "라운드 1 기업 턴 실행 전"이라는 전제가 깨져 예외를 던지고
+  // (그 세션은 이후 유령 학생을 영영 못 거른다). 그래서 `isLobbyOpen` 여부로 게이트를 걸지
+  // 않고 **항상 먼저 시도**한다 — `markLobbyClosedIfNeeded`/`lobbyTimerConsumed` 자체의
+  // 멱등성 가드가 이미 닫힌 로비에 대한 중복 호출을 안전하게 막아준다
+  // (`checkAndApplyTimeout`이 이미 쓰는 것과 같은 무조건 시도 패턴).
+  entry.lobbyClosedByTeacher = true;
+  if (markLobbyClosedIfNeeded(entry)) entry.session.bumpVersion();
 
   await entry.session.advancePhase(true);
   await entry.session.advanceUntilInputRequired(false);

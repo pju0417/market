@@ -74,8 +74,13 @@ export class GameSession {
   private readonly engine: RoundEngine;
   private readonly state: GameState;
   /** 이 세션에서 사람이 조종하는 전원. `GameState.players`는 애초에 학생(사람) 참가자만
-   * 담으므로(NPC는 별도 레코드), `this.state.players` 자체가 곧 사람 플레이어 목록이다. */
-  private readonly humanPlayers: readonly PlayerState[];
+   * 담으므로(NPC는 별도 레코드), 생성 시점에는 `this.humanPlayers === this.state.players`
+   * (같은 참조)이지만, `finalizeLobbyMembership` 호출 후에는 `this.humanPlayers`가 그
+   * 부분집합(새 배열)이 될 수 있다(Milestone 4 6단계) — `readonly`가 아닌 것도 그래서다.
+   * `GameState.players`/`companies`/`stores`/`households`의 `kind` 필드는 절대 안 바뀐다 —
+   * 유령이 된 참가자는 엔진 입장에서는 여전히 `kind:"student"`이고, 단지 이 세션이 더 이상
+   * 그의 제출을 기다리지 않을 뿐이다. */
+  private humanPlayers: readonly PlayerState[];
   private readonly pendingCompanyInputs = new Map<ParticipantId, CompanyDecisionInput>();
   private readonly pendingStoreRequests = new Map<ParticipantId, StoreDecisionInput>();
   private readonly pendingHouseholdRequests = new Map<ParticipantId, PurchaseRequestLine[]>();
@@ -83,6 +88,8 @@ export class GameSession {
    * 전원이 확인해야 다음 라운드로 진행하는 국지적 예외). */
   private readonly acknowledgedRoundResultPlayerIds = new Set<ParticipantId>();
   private readonly listeners = new Set<() => void>();
+  /** `finalizeLobbyMembership`이 이미 호출됐는지 (한 세션 안에서 한 번만 유효). */
+  private lobbyMembershipFinalized = false;
   private version = 0;
   private advancingPromise: Promise<StepOutcome> | undefined;
   private storage: StorageAdapter | undefined;
@@ -184,6 +191,32 @@ export class GameSession {
     const store = this.state.stores[player.storeId]!;
     store.districtId = choices.storeDistrictId;
     store.specialtyCategoryId = choices.storeCategoryId;
+    this.notify();
+  }
+
+  /**
+   * 로비가 실제로 닫히는 순간(src/server/sessionRegistry.ts의 markLobbyClosedIfNeeded에서만
+   * 호출됨) 호출된다 — 그때까지 창업 준비(/setup)를 제출하지 않은 학생을 이 순간부터 더
+   * 이상 "사람 입력을 기다려야 할 참가자"로 취급하지 않게 한다(Milestone 4 6단계). 이 메서드는
+   * GameState(players/companies/stores/households, kind 필드 포함)를 전혀 건드리지 않는다 —
+   * 제출이 계속 없는 참가자를 자동으로 봇 정책으로 대체하는 기존 메커니즘
+   * (resolveCompanyDecision 등, decisionSource가 undefined를 반환하면 자동 발동)을 그대로
+   * 재사용할 뿐이다. 한 번 제외되면 그 게임 안에서는 영구적이다(재접속해도 사람으로 복귀
+   * 불가 — 토큰은 유효하지만 이 세션의 humanPlayers에 더 이상 없으므로 제출/ack 시도는
+   * 401로 거부된다).
+   */
+  finalizeLobbyMembership(setupSubmittedPlayerIds: ReadonlySet<ParticipantId>): void {
+    if (!(this.state.currentRound === 1 && this.state.currentPhase === "company-turn")) {
+      throw new Error(
+        "finalizeLobbyMembership can only be called before round 1's company-turn has been executed",
+      );
+    }
+    if (this.lobbyMembershipFinalized) return;
+    this.lobbyMembershipFinalized = true;
+
+    const remaining = this.humanPlayers.filter((p) => setupSubmittedPlayerIds.has(p.id));
+    if (remaining.length === this.humanPlayers.length) return;
+    this.humanPlayers = remaining;
     this.notify();
   }
 

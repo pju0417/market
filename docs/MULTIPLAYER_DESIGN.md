@@ -177,3 +177,30 @@ TCP + `Promise.all` 동시 제출 테스트 1개(중복 정산·유실 없음), 
 확인) — 기존 `advancePhase`/`advanceUntilInputRequired`/`isWaitingForHumanInput`/
 `getUnsubmittedParticipantIds`만으로 충분해 `GameSession`에 새 메서드를 추가하지 않았다.
 상세 근거는 docs/DECISIONS.md D-029 참고.
+
+## 구현 상태 (Milestone 4 4단계)
+
+**round-result만의 국지적 예외(D-030)**: "한 학생이 다른 학생의 턴 종료를 기다리지 않는다"는
+원칙은 company/store/household-turn에는 그대로 유지되지만, 라운드 결과 확인
+(round-result phase)만은 예외적으로 전원이 "확인(ack)"해야 다음 라운드의 company-turn으로
+넘어간다 — "모두가 같은 속도로 라운드 결과를 함께 확인한다"는 교육적 경험을 사용자가
+우선한 선택이다. `GameSession.ts`에 확인 여부만 담는 `acknowledgedRoundResultPlayerIds`와
+신규 메서드 `acknowledgeRoundResult(playerId)`를 추가했고, `getUnsubmittedParticipantIds()`의
+`"round-result"` 케이스가 실제 게이트다. round-result 대기 자체는 D-029의 120초 자동
+타임아웃 정책을 상속하지 않는다(교사의 수동 강제진행만 유효) — 결과를 읽는 시간에 제출
+리듬을 강제하지 않기 위함이다.
+
+**다인원 로비(D-030 4-b)**: 세션 생성 시 열리고, 학생 전원이 `/setup`(상권/업종 선택)을
+제출하거나 교사가 `/close-lobby`로 명시적으로 닫거나 `DEFAULT_LOBBY_TIMEOUT_MS`(180초)를
+넘기면 닫힌다(`isLobbyOpen`). 로비가 열려있는 동안은 `submit/company`가 거부되어, 창업
+준비가 끝나기 전에 라운드 1 기업 턴이 시작될 수 없다. `GET /state`의 `lobby` 필드로
+클라이언트가 열림 여부와 미제출자 목록을 관찰한다.
+
+**유령 학생 처리(D-031)**: 교사가 `studentCount`를 실제 접속 인원보다 크게 잡으면, 로비가
+실제로 닫히는 순간까지 `/setup`을 제출하지 않은 학생은 그 순간부터 이 세션에서 "사람 입력을
+기다려야 할 참가자" 목록에서 영구히 제외된다(`GameSession.finalizeLobbyMembership`). 매
+라운드 round-result에서 교사가 유령을 대신해 수동 강제진행할 필요가 없어진다 — 이후 그
+참가자의 회사/가게/가계는 기존 봇 폴백 경로로만 진행된다. 트레이드오프 두 가지(유령의
+`kind`는 여전히 `"student"`라 NPC 우선순위 가산점 대상이 아님, 한 번 유령이 되면 그 게임
+안에서는 재접속해도 사람으로 복귀할 수 없음)는 재검토 여지가 있는 것으로 명시적으로
+기록해 두었다. 상세 근거는 docs/DECISIONS.md D-030/D-031 참고.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { BusinessSetupChoices } from "../../multiplayer/GameSession.js";
 import type { PlayerSlot, SessionClient } from "../network/sessionClient.js";
+import { translateNetworkError } from "../network/errorMessages.js";
 import { useNetworkGameSession } from "../network/useNetworkGameSession.js";
 import { SetupScreen } from "./SetupScreen.js";
 
@@ -44,7 +45,7 @@ export function NetworkLobbyScreen({ client, sessionId, token, slot, onLobbyClos
           client
             .setupBusinessChoices(sessionId, token, choices)
             .then(() => setSubmitted(true))
-            .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+            .catch((err: unknown) => setError(translateNetworkError(err)));
         }}
       />
     );

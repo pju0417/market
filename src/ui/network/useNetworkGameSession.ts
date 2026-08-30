@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from "react";
 import type { SessionClient, StateResult } from "./sessionClient.js";
+import { translateNetworkError } from "./errorMessages.js";
 
 const POLL_INTERVAL_MS = 3_000;
 
@@ -29,7 +30,7 @@ export function useNetworkGameSession(
         }
         setError(undefined);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(translateNetworkError(err));
       }
     }
 

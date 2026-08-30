@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SessionClient, type FetchLike, type PlayerSlot, type StateResult } from "../network/sessionClient.js";
+import { translateNetworkError } from "../network/errorMessages.js";
 import { computeUnsubmittedParticipants } from "../network/submissionStatus.js";
 import { PHASE_LABELS } from "../labels.js";
 import { DEFAULT_SUBMISSION_TIMEOUT_MS } from "../../server/timeoutConfig.js";
@@ -58,7 +59,7 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
         if (!cancelled) setSlots(result);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(translateNetworkError(err));
       });
     return () => {
       cancelled = true;
@@ -78,7 +79,7 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
           setStateResult(result);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(translateNetworkError(err));
       }
     }
 
@@ -113,7 +114,7 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
     try {
       await client.forceAdvance(sessionId, teacherToken);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(translateNetworkError(err));
     }
   }
 

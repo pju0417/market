@@ -41,8 +41,34 @@ export interface SessionEntry {
 
 const sessions = new Map<string, SessionEntry>();
 
+/**
+ * 세션 코드에 쓰는 문자 집합 (Milestone 4 6단계(2부)). 대문자+숫자에서 헷갈리기 쉬운
+ * 0/O, 1/I를 제외했다 — 초등학생이 교사가 불러주는 코드를 손으로 입력해야 하므로, 참가자
+ * 인증 토큰(`randomUUID`, 사람이 안 보고 안 타이핑함)과 달리 짧고 오타 나기 어려운 값이어야
+ * 한다. 경제 로직/게임 규칙과 무관한 UX 개선이라 CLAUDE.md 4절 기준 자동 수정 대상이다.
+ */
+const SESSION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const SESSION_CODE_LENGTH = 6;
+const MAX_SESSION_CODE_ATTEMPTS = 50;
+
+function generateSessionCode(): string {
+  let code = "";
+  for (let i = 0; i < SESSION_CODE_LENGTH; i++) {
+    code += SESSION_CODE_ALPHABET[Math.floor(Math.random() * SESSION_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
+function generateUniqueSessionId(): string {
+  for (let attempt = 0; attempt < MAX_SESSION_CODE_ATTEMPTS; attempt++) {
+    const candidate = generateSessionCode();
+    if (!sessions.has(candidate)) return candidate;
+  }
+  throw new Error("failed to generate a unique session code after max attempts");
+}
+
 export function createSession(studentCount: number, rngSeed?: number): { sessionId: string; entry: SessionEntry } {
-  const sessionId = randomUUID();
+  const sessionId = generateUniqueSessionId();
   const session = new GameSession(rngSeed ?? Date.now(), undefined, undefined, studentCount);
   const entry: SessionEntry = {
     session,
@@ -87,6 +113,14 @@ export function getSession(sessionId: string): SessionEntry | undefined {
  * 조용히 닫히는 경우(아무도 명시적으로 닫지 않은 경우)까지 커버한다. `lobbyTimerConsumed`
  * 가드 덕분에 두 번째 이후 호출은 아무 일도 하지 않는다.
  *
+ * 이제 `phaseStartedAt` 리셋뿐 아니라 학생 멤버십(누구를 사람으로 계속 기다릴지)도 이
+ * 시점에 확정한다(Milestone 4 6단계): 로비가 닫히는 그 순간까지 `/setup`을 제출하지 않은
+ * 학생을 `entry.session.finalizeLobbyMembership(entry.lobbySubmittedPlayerIds)`로 세션의
+ * "사람 입력을 기다려야 할 참가자" 목록에서 제거한다. 이 함수가 "로비가 방금 실제로 닫힌
+ * 순간"을 정확히 한 번 감지하는 유일한 지점이므로, 실제 호출부 4곳
+ * (`handleSetup`/`handleCloseLobby`/`checkAndApplyTimeout` 안전망/`doForceAdvance`) 전부
+ * 이 함수 하나만 거치면 자동으로 적용되고, 각 호출부를 개별로 수정할 필요가 없다.
+ *
  * 반환값(`true`면 이번 호출로 실제로 로비가 닫힌 시점을 처음 관찰한 것)은 호출자가
  * `entry.session.bumpVersion()`을 불러야 하는지 판단하는 데 쓴다 — 전원 제출로 자연히
  * 닫히는 경우(`applyBusinessSetupChoices`가 이미 매번 `notify()`를 부름)는 별도 처리가
@@ -98,6 +132,7 @@ export function markLobbyClosedIfNeeded(entry: SessionEntry): boolean {
   if (entry.lobbyTimerConsumed) return false;
   entry.lobbyTimerConsumed = true;
   entry.phaseStartedAt = Date.now();
+  entry.session.finalizeLobbyMembership(entry.lobbySubmittedPlayerIds);
   return true;
 }
 

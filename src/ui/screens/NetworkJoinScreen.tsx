@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PlayerSlot, SessionClient } from "../network/sessionClient.js";
+import { translateNetworkError } from "../network/errorMessages.js";
 
 export const NETWORK_JOIN_STORAGE_KEY = "economy-game:network-join";
 
@@ -19,7 +20,7 @@ export function NetworkJoinScreen({ client, onJoined }: Props) {
     client
       .getSlots(sessionId)
       .then((result) => setSlots(result))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(translateNetworkError(err)));
   }
 
   function handleJoin(slot: PlayerSlot): void {
@@ -33,7 +34,7 @@ export function NetworkJoinScreen({ client, onJoined }: Props) {
         );
         onJoined({ sessionId, token: result.token, slot: result.player });
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(translateNetworkError(err)));
   }
 
   return (

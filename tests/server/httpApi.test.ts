@@ -18,8 +18,13 @@ function req(partial: Partial<ApiRequest> & Pick<ApiRequest, "method" | "path">)
 /**
  * Milestone 4 4단계(D-030): company 제출은 로비가 닫히기 전까지 거부된다. 이 헬퍼를 쓰는
  * 대부분의 기존 테스트는 로비 자체를 검증하려는 게 아니라 그 이후의 제출/폴링/타임아웃
- * 동작을 검증하려는 것이므로, 기본값으로 세션 생성 직후 교사 토큰으로 로비를 바로 닫는다.
- * 로비 자체를 검증하는 테스트만 `closeLobby: false`로 열어 둔 채로 받는다.
+ * 동작을 검증하려는 것이므로, 기본값으로 세션 생성 직후 모든 학생이 실제로 /setup을 제출한
+ * 뒤(Milestone 4 6단계 이후에는 이게 실제 클라이언트 흐름과도 일치한다 — `NetworkLobbyScreen`은
+ * /setup을 건너뛸 방법을 제공하지 않는다) 교사 토큰으로 로비를 닫는다. 그렇지 않으면
+ * `finalizeLobbyMembership`이 "아무도 /setup을 제출하지 않았다"고 보고 전원을 유령으로
+ * 제외해버려, 이 헬퍼로 만든 세션에서 곧바로 `submit/company` 등을 부르는 기존 테스트 대부분이
+ * 401로 깨진다. 로비 자체(제출 현황, 미완료 학생 등)를 검증하는 테스트만 `closeLobby: false`로
+ * 열어 둔 채로 받아 직접 제어한다.
  */
 async function createTestSession(
   studentCount = 2,
@@ -32,6 +37,26 @@ async function createTestSession(
   const body = response.body as { sessionId: string; teacherToken: string };
 
   if (options.closeLobby !== false) {
+    for (let i = 1; i <= studentCount; i++) {
+      const join = await handleApiRequest(
+        req({ method: "POST", path: `/api/sessions/${body.sessionId}/join`, body: { playerId: `student-${i}` } }),
+      );
+      const { token } = join.body as { token: string };
+      const setup = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${body.sessionId}/setup`,
+        query: {},
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          companyDistrictId: "industrial",
+          companyCategoryId: "electronics",
+          storeDistrictId: "downtown",
+          storeCategoryId: "toys",
+        },
+      });
+      expect(setup.status).toBe(200);
+    }
+
     const closeLobby = await handleApiRequest({
       method: "POST",
       path: `/api/sessions/${body.sessionId}/close-lobby`,
@@ -51,6 +76,18 @@ describe("handleApiRequest (Milestone 4 2단계, no real server)", () => {
     );
     expect(response.status).toBe(201);
     expect(typeof (response.body as { sessionId: string }).sessionId).toBe("string");
+  });
+
+  it("returns a short, unambiguous session code instead of a 36-character UUID (Milestone 4 6단계(2부))", async () => {
+    const response = await handleApiRequest(
+      req({ method: "POST", path: "/api/sessions", body: { studentCount: 2, rngSeed: 1 } }),
+    );
+    const { sessionId, teacherToken } = response.body as { sessionId: string; teacherToken: string };
+    // 6-character code, uppercase letters/digits only, excluding easily-confused 0/O and 1/I.
+    expect(sessionId).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+    // teacherToken must remain a long, unguessable UUID (student-facing sessionId is the only
+    // value that got shortened; participant/teacher tokens are never typed by hand).
+    expect(teacherToken).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("rejects session creation with a non-positive-integer studentCount", async () => {
@@ -831,6 +868,13 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
       "round 1's company-turn has executed)",
     async () => {
       const { sessionId, teacherToken } = await createTestSession(2, { closeLobby: false });
+      // Join before force-advance so this token is one that was already valid while the lobby
+      // was still open — Milestone 4 6단계 also permanently excludes anyone who never finished
+      // /setup by the time the lobby actually closes, so a *fresh* join attempted after the fact
+      // would itself be rejected (that's covered by a dedicated test below) and would obscure
+      // what this regression test is actually about: that the late /setup itself gets an honest
+      // "lobby already closed" business-logic rejection rather than looking stuck.
+      const lateToken = await joinAndGetToken(sessionId, "student-2");
 
       const before = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
       const beforeBody = before.body as { lobby: { open: boolean }; state: { currentPhase: string } };
@@ -856,7 +900,7 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
         method: "POST",
         path: `/api/sessions/${sessionId}/setup`,
         query: {},
-        headers: { authorization: `Bearer ${await joinAndGetToken(sessionId, "student-2")}` },
+        headers: { authorization: `Bearer ${lateToken}` },
         body: validChoices(),
       });
       expect(lateSetup.status).toBe(400);
@@ -870,6 +914,22 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
     // unrelated submission-timeout auto-force-advance. Instead, backdate `lobbyStartedAt`
     // directly (this file already imports `getSession` for this kind of internal-state check).
     const { sessionId } = await createTestSession(2, { closeLobby: false });
+    // student-1 actually finishes /setup before the timeout; student-2 never does. This mirrors
+    // the realistic case the timeout is meant to handle (a genuine no-show), and — since
+    // Milestone 4 6단계 permanently excludes anyone who never finished /setup by the time the
+    // lobby closes — keeps at least one real human player in the session so this test still
+    // exercises the timer arithmetic it's meant to (a session with zero remaining human players
+    // has nothing left for `isWaitingForHumanInput()` to wait on, which is a different, degenerate
+    // scenario covered separately).
+    const tokenA = await joinAndGetToken(sessionId, "student-1");
+    await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/setup`,
+      query: {},
+      headers: { authorization: `Bearer ${tokenA}` },
+      body: validChoices(),
+    });
+    const tokenB = await joinAndGetToken(sessionId, "student-2");
     const entry = getSession(sessionId);
     if (!entry) throw new Error("expected session to exist");
 
@@ -881,8 +941,8 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
     const after = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
     expect((after.body as { lobby: { open: boolean } }).lobby.open).toBe(false);
 
-    // Once the lobby has timed out, submit/company must be accepted again (not stuck forever).
-    const tokenA = await joinAndGetToken(sessionId, "student-1");
+    // Once the lobby has timed out, the student who actually finished /setup can submit normally
+    // (not stuck forever).
     const submit = await handleApiRequest({
       method: "POST",
       path: `/api/sessions/${sessionId}/submit/company`,
@@ -891,6 +951,17 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
       body: { companyId: "student-1-company", input: { quantity: 5, quality: 0.5, wholesalePrice: 8 } },
     });
     expect(submit.status).toBe(200);
+
+    // student-2 never finished /setup before the lobby timed out — Milestone 4 6단계: permanently
+    // excluded, so their (still technically valid, pre-timeout) token is rejected too.
+    const ghostSubmit = await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/submit/company`,
+      query: {},
+      headers: { authorization: `Bearer ${tokenB}` },
+      body: { companyId: "student-2-company", input: { quantity: 5, quality: 0.5, wholesalePrice: 8 } },
+    });
+    expect(ghostSubmit.status).toBe(401);
   });
 
   it(
@@ -905,9 +976,22 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
       vi.useFakeTimers();
       try {
         const { sessionId, teacherToken } = await createTestSession(2, { closeLobby: false });
+        // student-1 finishes /setup so at least one real human player remains in the session once
+        // the lobby closes (Milestone 4 6단계 permanently excludes anyone who never finished
+        // /setup) — otherwise `isWaitingForHumanInput()` would have nobody left to wait on and
+        // the deadline-based auto-force-advance this test exercises would never fire, which is a
+        // different, degenerate scenario unrelated to what's being tested here (timer arithmetic).
+        const tokenA = await joinAndGetToken(sessionId, "student-1");
+        await handleApiRequest({
+          method: "POST",
+          path: `/api/sessions/${sessionId}/setup`,
+          query: {},
+          headers: { authorization: `Bearer ${tokenA}` },
+          body: validChoices(),
+        });
 
         // Lobby runs long (130s) — past the 120s submission timeout, but still under the 180s
-        // lobby timeout. Nobody has finished setup yet.
+        // lobby timeout. student-2 never finishes setup.
         vi.advanceTimersByTime(130_000);
         const whileLobbyOpen = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
         const lobbyStillOpen = (whileLobbyOpen.body as { lobby: { open: boolean }; state: { currentPhase: string } }).lobby;
@@ -942,6 +1026,214 @@ describe("POST /api/sessions/:id/setup and /close-lobby (Milestone 4 4단계 서
       } finally {
         vi.useRealTimers();
       }
+    },
+  );
+});
+
+describe("Milestone 4 6단계: 로비 종료 시점에 미제출 학생을 영구히 제외 (GameSession.finalizeLobbyMembership)", () => {
+  function validChoices() {
+    return {
+      companyDistrictId: "industrial",
+      companyCategoryId: "electronics",
+      storeDistrictId: "downtown",
+      storeCategoryId: "toys",
+    };
+  }
+
+  async function joinAndGetToken(sessionId: string, playerId: string): Promise<string> {
+    const join = await handleApiRequest(req({ method: "POST", path: `/api/sessions/${sessionId}/join`, body: { playerId } }));
+    return (join.body as { token: string }).token;
+  }
+
+  it(
+    "once the teacher closes the lobby with only 1 of 3 students having submitted /setup, that " +
+      "student alone can drive submit/company forward, round-result's unsubmittedParticipantIds " +
+      "no longer lists the other two, and that student's lone acknowledge-round-result advances " +
+      "the game to round 2 without any teacher force-advance",
+    async () => {
+      const { sessionId, teacherToken } = await createTestSession(3, { closeLobby: false });
+      const tokenA = await joinAndGetToken(sessionId, "student-1");
+      await joinAndGetToken(sessionId, "student-2"); // joins but never submits /setup
+      await joinAndGetToken(sessionId, "student-3"); // joins but never submits /setup
+
+      const setupA = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/setup`,
+        query: {},
+        headers: { authorization: `Bearer ${tokenA}` },
+        body: validChoices(),
+      });
+      expect(setupA.status).toBe(200);
+
+      const closeLobby = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/close-lobby`,
+        query: {},
+        headers: { authorization: `Bearer ${teacherToken}` },
+      });
+      expect(closeLobby.status).toBe(200);
+
+      const submit = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/submit/company`,
+        query: {},
+        headers: { authorization: `Bearer ${tokenA}` },
+        body: { companyId: "student-1-company", input: { quantity: 5, quality: 0.5, wholesalePrice: 8 } },
+      });
+      expect(submit.status).toBe(200);
+
+      // Only the submitting student was ever waited on — the phase already moved on.
+      const afterCompanyTurn = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      expect((afterCompanyTurn.body as { state: { currentPhase: string } }).state.currentPhase).not.toBe("company-turn");
+
+      await driveToRoundResult(sessionId);
+      const roundResultState = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      const unsubmitted = (roundResultState.body as { unsubmittedParticipantIds: string[] }).unsubmittedParticipantIds;
+      expect(unsubmitted).toEqual(["student-1"]);
+      expect(unsubmitted).not.toContain("student-2");
+      expect(unsubmitted).not.toContain("student-3");
+
+      const ack = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/acknowledge-round-result`,
+        query: {},
+        headers: { authorization: `Bearer ${tokenA}` },
+      });
+      expect(ack.status).toBe(200);
+
+      const afterAck = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      const afterAckState = (afterAck.body as { state: { currentPhase: string; currentRound: number } }).state;
+      expect(afterAckState.currentRound).toBe(2);
+      expect(afterAckState.currentPhase).toBe("company-turn");
+    },
+  );
+
+  it(
+    "a ghost student's token (joined but never submitted /setup before the lobby closed) is " +
+      "rejected on a late submit/company, and on a late acknowledge-round-result",
+    async () => {
+      const { sessionId, teacherToken } = await createTestSession(3, { closeLobby: false });
+      const tokenA = await joinAndGetToken(sessionId, "student-1");
+      await joinAndGetToken(sessionId, "student-2");
+      const ghostToken = await joinAndGetToken(sessionId, "student-3");
+
+      await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/setup`,
+        query: {},
+        headers: { authorization: `Bearer ${tokenA}` },
+        body: validChoices(),
+      });
+
+      await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/close-lobby`,
+        query: {},
+        headers: { authorization: `Bearer ${teacherToken}` },
+      });
+
+      const ghostSubmit = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/submit/company`,
+        query: {},
+        headers: { authorization: `Bearer ${ghostToken}` },
+        body: { companyId: "student-3-company", input: { quantity: 5, quality: 0.5, wholesalePrice: 8 } },
+      });
+      // The token is still recognized by the token store (it was legitimately issued at /join),
+      // but this session no longer treats "student-3" as a human player it waits on — the
+      // existing submit/company guard (`entry.session.getPlayers().find(...)`) rejects it exactly
+      // like an unrecognized token.
+      expect(ghostSubmit.status).toBe(401);
+
+      await driveToRoundResult(sessionId);
+      const ghostAck = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/acknowledge-round-result`,
+        query: {},
+        headers: { authorization: `Bearer ${ghostToken}` },
+      });
+      // acknowledge-round-result resolves the token to a playerId directly and only then asks
+      // GameSession to record the ack, so a ghost's rejection surfaces as a 400 (GameSession
+      // throwing "unknown or non-human playerId") rather than submit/company's 401 — both reject
+      // the ghost, just via slightly different codepaths already present before this change.
+      expect(ghostAck.status).toBe(400);
+    },
+  );
+
+  it("doForceAdvance (teacher force-advance) closing a still-open lobby also finalizes ghost membership", async () => {
+    const { sessionId, teacherToken } = await createTestSession(3, { closeLobby: false });
+    const tokenA = await joinAndGetToken(sessionId, "student-1");
+    await joinAndGetToken(sessionId, "student-2");
+
+    await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/setup`,
+      query: {},
+      headers: { authorization: `Bearer ${tokenA}` },
+      body: validChoices(),
+    });
+
+    const forceAdvance = await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/force-advance`,
+      query: {},
+      headers: { authorization: `Bearer ${teacherToken}` },
+    });
+    expect(forceAdvance.status).toBe(200);
+
+    const entry = getSession(sessionId);
+    if (!entry) throw new Error("expected session to exist");
+    // student-2 and student-3 never finished /setup before the teacher forced the lobby closed —
+    // they must no longer be part of this session's human players.
+    expect(entry.session.getPlayers().map((p) => p.id).sort()).toEqual(["student-1"]);
+  });
+
+  it(
+    "regression: force-advance called after the lobby's wall-clock timeout has elapsed but " +
+      "before any GET /state poll has ever run does not crash and still finalizes ghost " +
+      "membership (code-reviewer 2차 발견 — isLobbyOpen() already returns false once the " +
+      "180s timeout has elapsed, purely from a Date.now() comparison, even though " +
+      "markLobbyClosedIfNeeded/finalizeLobbyMembership was never actually called yet; gating " +
+      "doForceAdvance's finalize attempt behind `if (isLobbyOpen(entry))` skipped it entirely " +
+      "and let advancePhase(true) run company-turn first, so the next markLobbyClosedIfNeeded " +
+      "call — from any later poll — threw because finalizeLobbyMembership's precondition " +
+      "(still round 1's company-turn) no longer held, and the ghost was never excluded)",
+    async () => {
+      const { sessionId, teacherToken } = await createTestSession(2, { closeLobby: false });
+      const tokenA = await joinAndGetToken(sessionId, "student-1");
+      await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/setup`,
+        query: {},
+        headers: { authorization: `Bearer ${tokenA}` },
+        body: validChoices(),
+      });
+      // student-2 never joins/submits /setup.
+
+      const entry = getSession(sessionId);
+      if (!entry) throw new Error("expected session to exist");
+      entry.lobbyStartedAt = Date.now() - (DEFAULT_LOBBY_TIMEOUT_MS + 1_000);
+      // Crucially: no GET /state (or any other request) happens here — lobbyTimerConsumed is
+      // still false, even though isLobbyOpen(entry) would already report false due to the
+      // elapsed wall clock. force-advance is the very first request since the timeout elapsed.
+
+      const forceAdvance = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/force-advance`,
+        query: {},
+        headers: { authorization: `Bearer ${teacherToken}` },
+      });
+      expect(forceAdvance.status).toBe(200);
+
+      // The old bug: this next call would throw an uncaught error (finalizeLobbyMembership's
+      // "before round 1's company-turn" precondition already violated by advancePhase(true)
+      // having run without ever finalizing membership first).
+      const afterForceAdvance = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      expect(afterForceAdvance.status).toBe(200);
+
+      // student-2 never finished /setup — must have been excluded, not left as a permanent
+      // human ghost for the rest of the game.
+      expect(entry.session.getPlayers().map((p) => p.id)).toEqual(["student-1"]);
     },
   );
 });

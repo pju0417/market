@@ -604,3 +604,101 @@ describe("GameSession.applyBusinessSetupChoices (Milestone 4 4단계 서버 부�
     expect(state.stores[player.storeId]!.specialtyCategoryId).toBe("toys");
   });
 });
+
+describe("GameSession.finalizeLobbyMembership (Milestone 4 6단계: 로비 미제출 학생 영구 제외)", () => {
+  it("throws when called outside round 1's company-turn", async () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    await session.advancePhase(true); // company-turn -> company-settlement
+
+    expect(() => session.finalizeLobbyMembership(new Set())).toThrow();
+  });
+
+  it("removes students who never submitted /setup from getPlayers() and future submission gates", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB, playerC] = session.getPlayers();
+
+    session.finalizeLobbyMembership(new Set([playerA!.id, playerB!.id]));
+
+    expect(session.getPlayers().map((p) => p.id).sort()).toEqual([playerA!.id, playerB!.id].sort());
+    expect(session.getUnsubmittedParticipantIds().sort()).toEqual(
+      [playerA!.companyId, playerB!.companyId].sort(),
+    );
+
+    const input = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+    expect(() => session.submitCompanyDecision(playerC!.companyId, input)).toThrow();
+  });
+
+  it("lets the remaining students finish round 1 and acknowledge round-result without the excluded student, no teacher force needed", async () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB] = session.getPlayers();
+
+    session.finalizeLobbyMembership(new Set([playerA!.id, playerB!.id]));
+
+    const input = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+    session.submitCompanyDecision(playerA!.companyId, input);
+    session.submitCompanyDecision(playerB!.companyId, input);
+    expect(session.isWaitingForHumanInput()).toBe(false);
+    await session.advancePhase(); // no force: excluded student is simply not waited on
+
+    while (session.getState().currentPhase !== "store-turn") {
+      await session.advancePhase(true);
+    }
+    session.submitStoreDecision(playerA!.storeId, { purchases: [] });
+    session.submitStoreDecision(playerB!.storeId, { purchases: [] });
+    await session.advancePhase();
+
+    while (session.getState().currentPhase !== "household-turn") {
+      await session.advancePhase(true);
+    }
+    session.submitHouseholdPurchases(playerA!.householdId, []);
+    session.submitHouseholdPurchases(playerB!.householdId, []);
+    await session.advancePhase();
+
+    while (session.getState().currentPhase !== "round-result") {
+      await session.advancePhase(true);
+    }
+
+    session.acknowledgeRoundResult(playerA!.id);
+    session.acknowledgeRoundResult(playerB!.id);
+    const result = await session.advancePhase(false);
+
+    expect(result.phase).toBe("round-result");
+    expect(session.getState().currentRound).toBe(2);
+  });
+
+  it("is idempotent: a second call (even with a different set) has no effect", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB] = session.getPlayers();
+
+    session.finalizeLobbyMembership(new Set([playerA!.id, playerB!.id]));
+    const afterFirst = session.getPlayers().map((p) => p.id).sort();
+
+    session.finalizeLobbyMembership(new Set([playerA!.id]));
+
+    expect(session.getPlayers().map((p) => p.id).sort()).toEqual(afterFirst);
+  });
+
+  it("bumps getVersion() only when membership actually shrinks", () => {
+    const shrinkSession = new GameSession(1, undefined, undefined, 3);
+    const [a, b] = shrinkSession.getPlayers();
+    const versionBeforeShrink = shrinkSession.getVersion();
+    shrinkSession.finalizeLobbyMembership(new Set([a!.id, b!.id]));
+    expect(shrinkSession.getVersion()).toBeGreaterThan(versionBeforeShrink);
+
+    const noopSession = new GameSession(1, undefined, undefined, 3);
+    const allIds = noopSession.getPlayers().map((p) => p.id);
+    const versionBeforeNoop = noopSession.getVersion();
+    noopSession.finalizeLobbyMembership(new Set(allIds));
+    expect(noopSession.getVersion()).toBe(versionBeforeNoop);
+  });
+
+  it("is a no-op when every student submitted /setup (no one excluded)", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const allIds = session.getPlayers().map((p) => p.id);
+    const before = session.getPlayers();
+
+    session.finalizeLobbyMembership(new Set(allIds));
+
+    expect(session.getPlayers()).toEqual(before);
+  });
+});

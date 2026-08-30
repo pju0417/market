@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SessionClient } from "../network/sessionClient.js";
+import { translateNetworkError } from "../network/errorMessages.js";
 import { NetworkSessionMonitor, storeTeacherToken } from "./NetworkSessionMonitor.js";
 
 interface Props {
@@ -22,13 +23,13 @@ export function TeacherSessionScreen({ client }: Props) {
         setTeacherToken(result.teacherToken);
         storeTeacherToken(result.sessionId, result.teacherToken);
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(translateNetworkError(err)));
   }
 
   function handleCloseLobby(): void {
     if (!sessionId || !teacherToken) return;
     setError(undefined);
-    client.closeLobby(sessionId, teacherToken).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    client.closeLobby(sessionId, teacherToken).catch((err: unknown) => setError(translateNetworkError(err)));
   }
 
   if (!sessionId) {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { PlayerSlot, SessionClient } from "../network/sessionClient.js";
+import { translateNetworkError } from "../network/errorMessages.js";
 import { NetworkDecisionSubmitter } from "../network/NetworkDecisionSubmitter.js";
 import { useNetworkGameSession } from "../network/useNetworkGameSession.js";
 import { PHASE_LABELS } from "../labels.js";
@@ -111,7 +112,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
               setAckError(undefined);
               setAckedForRound(state.currentRound);
               client.acknowledgeRoundResult(sessionId, token).catch((err: unknown) => {
-                setAckError(err instanceof Error ? err.message : String(err));
+                setAckError(translateNetworkError(err));
                 setAckedForRound(undefined);
               });
             }}

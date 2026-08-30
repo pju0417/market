@@ -67,7 +67,18 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     const { token: tokenB, player: playerB } = joinB.body as JoinResult;
 
     // Milestone 4 4단계 (D-030): company submissions are blocked until the lobby closes. This
-    // test predates the lobby and isn't exercising it, so the teacher closes it immediately.
+    // test predates the lobby and isn't exercising it, so both students finish setup immediately
+    // (Milestone 4 6단계: anyone who hasn't finished /setup by the time the lobby closes is
+    // permanently excluded from this session's human players, so both must submit it here to
+    // keep participating through the rest of the test).
+    const setupChoices = {
+      companyDistrictId: "industrial",
+      companyCategoryId: "electronics",
+      storeDistrictId: "downtown",
+      storeCategoryId: "toys",
+    };
+    expect((await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenA)).status).toBe(200);
+    expect((await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenB)).status).toBe(200);
     const closeLobby = await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken);
     expect(closeLobby.status).toBe(200);
 
@@ -207,7 +218,17 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     const { token: tokenA, player: playerA } = joinA.body as JoinResult;
     const { token: tokenB, player: playerB } = joinB.body as JoinResult;
 
-    // Milestone 4 4단계 (D-030): close the lobby immediately, this test isn't exercising it.
+    // Milestone 4 4단계 (D-030): close the lobby immediately, this test isn't exercising it —
+    // but Milestone 4 6단계 permanently excludes anyone who hasn't finished /setup by then, so
+    // both students submit it first.
+    const setupChoices = {
+      companyDistrictId: "industrial",
+      companyCategoryId: "electronics",
+      storeDistrictId: "downtown",
+      storeCategoryId: "toys",
+    };
+    await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenA);
+    await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenB);
     await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken);
 
     // Fire both submissions at the same time (Promise.all) instead of sequentially, to exercise
@@ -285,4 +306,182 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     expect(finalState.roundMetrics).toHaveLength(1);
     expect(finalState.currentRound).toBe(2);
   });
+
+  it(
+    "Milestone 4 6단계: with studentCount=3 but only one student actually joins+/setup+close-lobby, " +
+      "that one student alone can drive company/store/household turns through real settlement, and " +
+      "a lone acknowledge-round-result (no teacher force-advance) reaches round 2's company-turn",
+    async () => {
+      const created = await postJson("/api/sessions", { studentCount: 3, rngSeed: 13 });
+      const { sessionId, teacherToken } = created.body as { sessionId: string; teacherToken: string };
+
+      const joinA = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-1" });
+      const { token: tokenA, player: playerA } = joinA.body as JoinResult;
+
+      const setupA = await postJson(
+        `/api/sessions/${sessionId}/setup`,
+        {
+          companyDistrictId: "industrial",
+          companyCategoryId: "electronics",
+          storeDistrictId: "downtown",
+          storeCategoryId: "toys",
+        },
+        tokenA,
+      );
+      expect(setupA.status).toBe(200);
+
+      const closeLobby = await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken);
+      expect(closeLobby.status).toBe(200);
+
+      const submitCompany = await postJson(
+        `/api/sessions/${sessionId}/submit/company`,
+        { companyId: playerA.companyId, input: { quantity: 12, quality: 0.6, wholesalePrice: 9 } },
+        tokenA,
+      );
+      expect(submitCompany.status).toBe(200);
+
+      let state = await getJson(`/api/sessions/${sessionId}/state`);
+      expect((state.body as { state: { currentPhase: string } }).state.currentPhase).toBe("store-turn");
+
+      const submitStore = await postJson(
+        `/api/sessions/${sessionId}/submit/store`,
+        { storeId: playerA.storeId, input: { purchases: [], retailPrice: 15 } },
+        tokenA,
+      );
+      expect(submitStore.status).toBe(200);
+
+      state = await getJson(`/api/sessions/${sessionId}/state`);
+      expect((state.body as { state: { currentPhase: string } }).state.currentPhase).toBe("household-turn");
+
+      const submitHousehold = await postJson(
+        `/api/sessions/${sessionId}/submit/household`,
+        { householdId: playerA.householdId, lines: [] },
+        tokenA,
+      );
+      expect(submitHousehold.status).toBe(200);
+
+      const afterHouseholds = await getJson(`/api/sessions/${sessionId}/state`);
+      const afterHouseholdsState = afterHouseholds.body as {
+        state: { currentPhase: string; currentRound: number; roundMetrics: unknown[] };
+        unsubmittedParticipantIds: string[];
+      };
+      expect(afterHouseholdsState.state.roundMetrics).toHaveLength(1);
+      expect(afterHouseholdsState.state.currentPhase).toBe("round-result");
+      expect(afterHouseholdsState.state.currentRound).toBe(1);
+      // The two students who never joined/finished /setup are no longer waited on at all.
+      expect(afterHouseholdsState.unsubmittedParticipantIds).toEqual([playerA.id]);
+
+      const ack = await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenA);
+      expect(ack.status).toBe(200);
+
+      const final = await getJson(`/api/sessions/${sessionId}/state`);
+      const finalState = (final.body as { state: { currentPhase: string; currentRound: number } }).state;
+      expect(finalState.currentPhase).toBe("company-turn");
+      expect(finalState.currentRound).toBe(2);
+    },
+  );
+
+  it(
+    "Milestone 4 6단계(2부): two students can drive an entire 2-student game through all 7 " +
+      "rounds over real TCP, submitting every phase and acknowledging every round-result, until " +
+      "GET /state finally reports gameOver: true",
+    async () => {
+      const created = await postJson("/api/sessions", { studentCount: 2, rngSeed: 21 });
+      const { sessionId, teacherToken } = created.body as { sessionId: string; teacherToken: string };
+
+      const joinA = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-1" });
+      const joinB = await postJson(`/api/sessions/${sessionId}/join`, { playerId: "student-2" });
+      const { token: tokenA, player: playerA } = joinA.body as JoinResult;
+      const { token: tokenB, player: playerB } = joinB.body as JoinResult;
+
+      const setupChoices = {
+        companyDistrictId: "industrial",
+        companyCategoryId: "electronics",
+        storeDistrictId: "downtown",
+        storeCategoryId: "toys",
+      };
+      expect((await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenA)).status).toBe(200);
+      expect((await postJson(`/api/sessions/${sessionId}/setup`, setupChoices, tokenB)).status).toBe(200);
+      expect((await postJson(`/api/sessions/${sessionId}/close-lobby`, {}, teacherToken)).status).toBe(200);
+
+      // Drives a single round from company-turn all the way to that round's round-result, then
+      // has both students acknowledge it so the game proceeds toward the next round (or game-over
+      // on the last round). Submitted values are fixed/repeated every round on purpose (D-030/
+      // D-031 background already covers why the specific values don't matter for this test).
+      async function playOneRound(): Promise<void> {
+        const submitCompanyA = await postJson(
+          `/api/sessions/${sessionId}/submit/company`,
+          { companyId: playerA.companyId, input: { quantity: 12, quality: 0.6, wholesalePrice: 9 } },
+          tokenA,
+        );
+        expect(submitCompanyA.status).toBe(200);
+        const submitCompanyB = await postJson(
+          `/api/sessions/${sessionId}/submit/company`,
+          { companyId: playerB.companyId, input: { quantity: 10, quality: 0.5, wholesalePrice: 7 } },
+          tokenB,
+        );
+        expect(submitCompanyB.status).toBe(200);
+
+        const afterCompanies = await getJson(`/api/sessions/${sessionId}/state`);
+        expect((afterCompanies.body as { state: { currentPhase: string } }).state.currentPhase).toBe("store-turn");
+
+        const submitStoreA = await postJson(
+          `/api/sessions/${sessionId}/submit/store`,
+          { storeId: playerA.storeId, input: { purchases: [], retailPrice: 15 } },
+          tokenA,
+        );
+        expect(submitStoreA.status).toBe(200);
+        const submitStoreB = await postJson(
+          `/api/sessions/${sessionId}/submit/store`,
+          { storeId: playerB.storeId, input: { purchases: [], retailPrice: 15 } },
+          tokenB,
+        );
+        expect(submitStoreB.status).toBe(200);
+
+        const afterStores = await getJson(`/api/sessions/${sessionId}/state`);
+        expect((afterStores.body as { state: { currentPhase: string } }).state.currentPhase).toBe("household-turn");
+
+        const submitHouseholdA = await postJson(
+          `/api/sessions/${sessionId}/submit/household`,
+          { householdId: playerA.householdId, lines: [] },
+          tokenA,
+        );
+        expect(submitHouseholdA.status).toBe(200);
+        const submitHouseholdB = await postJson(
+          `/api/sessions/${sessionId}/submit/household`,
+          { householdId: playerB.householdId, lines: [] },
+          tokenB,
+        );
+        expect(submitHouseholdB.status).toBe(200);
+
+        const afterHouseholds = await getJson(`/api/sessions/${sessionId}/state`);
+        expect((afterHouseholds.body as { state: { currentPhase: string } }).state.currentPhase).toBe(
+          "round-result",
+        );
+
+        expect((await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenA)).status).toBe(200);
+        expect((await postJson(`/api/sessions/${sessionId}/acknowledge-round-result`, {}, tokenB)).status).toBe(200);
+      }
+
+      const initialState = await getJson(`/api/sessions/${sessionId}/state`);
+      const totalRounds = (initialState.body as { state: { config: { totalRounds: number } } }).state.config
+        .totalRounds;
+      expect(totalRounds).toBe(7);
+
+      for (let round = 1; round <= totalRounds; round++) {
+        const before = await getJson(`/api/sessions/${sessionId}/state`);
+        expect((before.body as { state: { currentRound: number } }).state.currentRound).toBe(round);
+        await playOneRound();
+      }
+
+      const final = await getJson(`/api/sessions/${sessionId}/state`);
+      const finalState = final.body as {
+        state: { currentRound: number; roundMetrics: unknown[] };
+        gameOver: boolean;
+      };
+      expect(finalState.gameOver).toBe(true);
+      expect(finalState.state.currentRound).toBe(totalRounds + 1);
+      expect(finalState.state.roundMetrics).toHaveLength(totalRounds);
+    },
+  );
 });

@@ -56,12 +56,21 @@ export interface StoreDecisionInput {
 
 export type FetchLike = typeof fetch;
 
+/** `body`가 `{ error: string }` 형태이면 그 문자열을, 아니면 `undefined`를 반환한다. */
+function extractServerErrorMessage(body: unknown): string | undefined {
+  if (typeof body === "object" && body !== null && "error" in body) {
+    const value = (body as { error: unknown }).error;
+    return typeof value === "string" ? value : undefined;
+  }
+  return undefined;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly body: unknown,
   ) {
-    super(`API request failed with status ${status}`);
+    super(extractServerErrorMessage(body) ?? `API request failed with status ${status}`);
   }
 }
 
