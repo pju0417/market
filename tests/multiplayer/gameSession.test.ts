@@ -702,3 +702,87 @@ describe("GameSession.finalizeLobbyMembership (Milestone 4 6단계: 로비 미�
     expect(session.getPlayers()).toEqual(before);
   });
 });
+
+describe("GameSession.exportPendingSubmissions / resumeFromState(pending) (Milestone 5, D-032)", () => {
+  it("round-trips buffered submissions through export -> resumeFromState(pending) without losing them", () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB, playerC] = session.getPlayers();
+
+    const companyInput = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+    session.submitCompanyDecision(playerA!.companyId, companyInput);
+
+    const snapshot = session.exportPendingSubmissions();
+    expect(snapshot.companyInputs[playerA!.companyId]).toEqual(companyInput);
+    expect(Object.keys(snapshot.companyInputs)).toEqual([playerA!.companyId]);
+    expect(snapshot.humanPlayerIds.sort()).toEqual(session.getPlayers().map((p) => p.id).sort());
+    expect(snapshot.lobbyMembershipFinalized).toBe(false);
+
+    // Simulate the instance disappearing (Apps Script style) and being rebuilt from the
+    // exported GameState + the exported pending snapshot.
+    const reconstructed = GameSession.resumeFromState(session.getState(), snapshot);
+
+    expect(reconstructed.getUnsubmittedParticipantIds().sort()).toEqual(
+      [playerB!.companyId, playerC!.companyId].sort(),
+    );
+    expect(reconstructed.isWaitingForHumanInput()).toBe(true);
+
+    reconstructed.submitCompanyDecision(playerB!.companyId, companyInput);
+    reconstructed.submitCompanyDecision(playerC!.companyId, companyInput);
+    expect(reconstructed.isWaitingForHumanInput()).toBe(false);
+  });
+
+  it("round-trips acknowledgedRoundResultPlayerIds and a finalized (shrunk) lobby membership", async () => {
+    const session = new GameSession(1, undefined, undefined, 3);
+    const [playerA, playerB, playerC] = session.getPlayers();
+    session.finalizeLobbyMembership(new Set([playerA!.id, playerB!.id]));
+
+    const input = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+    session.submitCompanyDecision(playerA!.companyId, input);
+    session.submitCompanyDecision(playerB!.companyId, input);
+    await session.advancePhase();
+    while (session.getState().currentPhase !== "store-turn") {
+      await session.advancePhase(true);
+    }
+    session.submitStoreDecision(playerA!.storeId, { purchases: [] });
+    session.submitStoreDecision(playerB!.storeId, { purchases: [] });
+    await session.advancePhase();
+    while (session.getState().currentPhase !== "household-turn") {
+      await session.advancePhase(true);
+    }
+    session.submitHouseholdPurchases(playerA!.householdId, []);
+    session.submitHouseholdPurchases(playerB!.householdId, []);
+    await session.advancePhase();
+    while (session.getState().currentPhase !== "round-result") {
+      await session.advancePhase(true);
+    }
+    session.acknowledgeRoundResult(playerA!.id);
+
+    const snapshot = session.exportPendingSubmissions();
+    expect(snapshot.lobbyMembershipFinalized).toBe(true);
+    expect(snapshot.humanPlayerIds.sort()).toEqual([playerA!.id, playerB!.id].sort());
+    expect(snapshot.acknowledgedRoundResultPlayerIds).toEqual([playerA!.id]);
+
+    const reconstructed = GameSession.resumeFromState(session.getState(), snapshot);
+    expect(reconstructed.getPlayers().map((p) => p.id).sort()).toEqual([playerA!.id, playerB!.id].sort());
+    expect(reconstructed.getUnsubmittedParticipantIds()).toEqual([playerB!.id]);
+
+    // The excluded student (never in humanPlayerIds) must remain excluded after reconstruction.
+    expect(() => reconstructed.acknowledgeRoundResult(playerC!.id)).toThrow();
+
+    reconstructed.acknowledgeRoundResult(playerB!.id);
+    const result = await reconstructed.advancePhase(false);
+    expect(result.phase).toBe("round-result");
+    expect(reconstructed.getState().currentRound).toBe(2);
+  });
+
+  it("resumeFromState without a pending argument behaves exactly as before (empty buffers, no lobby finalization)", async () => {
+    const session = new GameSession(1);
+    await session.advancePhase(true);
+
+    const resumed = GameSession.resumeFromState(session.getState());
+
+    expect(resumed.isWaitingForHumanInput()).toBe(false);
+    expect(resumed.getUnsubmittedParticipantIds()).toEqual([]);
+    expect(resumed.getPlayers().map((p) => p.id)).toEqual(session.getPlayers().map((p) => p.id));
+  });
+});

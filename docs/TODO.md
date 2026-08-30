@@ -996,6 +996,155 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
 [GOOGLE_SHEETS_ARCHITECTURE.md](GOOGLE_SHEETS_ARCHITECTURE.md)의 `GoogleSheetsAdapter` 구현
 및 Apps Script 배포.
 
+### 1부 — 상태 계층만 구현 (실제 Google API 호출/배포 없음, D-032)
+
+목표: 나중에 실제 Google 계정에 배포할 Apps Script 코드와 시트 스키마를 지금 준비해둔다.
+실제 배포/OAuth/Sheets API 호출, 요청 디스패치(`entry.ts`, `doGet`/`doPost`)는 이번 범위가
+아니다(다음 작업). 기존 로컬 서버 코드(`src/server/*`)와 경제 엔진(`src/engine`/`src/economy`/
+`src/npc`/`src/advisor`)은 한 글자도 건드리지 않았다(`git diff --stat`으로 확인).
+
+- [x] `src/multiplayer/GameSession.ts`에 추가만(기존 메서드 무변경): `PendingSubmissionsSnapshot`
+      타입, `exportPendingSubmissions()`, `resumeFromState(savedState, pending?)`(2번째 인자
+      추가, 생략하면 기존 동작 그대로). `GameState` 자체에는 이 정보를 담지 않는다("GameState는
+      누가 사람인지 담지 않는다" 원칙 유지).
+- [x] `src/appsScript/hostInterfaces.ts` (신규): Apps Script 전역 서비스를 감싸는 narrow
+      interface(`SpreadsheetGateway`, `LockLike`, `UuidGenerator`)만 정의(구현 없음, 실제
+      `SpreadsheetApp` 등의 타입을 import하지 않음).
+- [x] `src/appsScript/sheetSchema.ts` (신규): 탭 이름 상수(`SESSIONS_SHEET`/`LIVE_STATE_SHEET`/
+      `PENDING_SUBMISSIONS_SHEET`/`ROUND_METRICS_SHEET`/`ROUND_SUMMARY_SHEET`/`TOKENS_SHEET`)와
+      순수 직렬화 함수: `serializeLiveState`/`deserializeLiveState`(`GameState`에서
+      `roundMetrics`를 뺀 나머지, 라운드 수와 무관하게 크기가 일정), `serializeRoundMetrics`/
+      `deserializeRoundMetrics`(라운드 하나 = 시트 한 행, append-only), `buildRoundSummaryRows`
+      (참가자당 1행으로 펼친 write-only 파생 데이터 — 회사/가게/가계는 서로 다른 id 공간이라
+      `entityType` 컬럼으로 구분해 엔티티당 1행). 20명 학생 + NPC 백필로 7라운드를 완주시킨
+      실제 `GameState`(`simulateGame(20, 42)`)로 `serializeLiveState` 결과 문자열 길이가
+      40,000자 미만(Google Sheets 셀 한도 약 50,000자 대비 안전 마진)임을 확인하는 회귀
+      테스트, 그리고 직렬화→역직렬화 왕복이 원본과 동일함을 확인하는 테스트를 추가했다.
+- [x] `src/appsScript/gasSessionStore.ts` (신규): `src/server/sessionRegistry.ts`와 같은
+      이름/의미의 함수(`createSession`/`getSession`/`saveSession`/`isLobbyOpen`/
+      `markLobbyClosedIfNeeded`/`syncPhaseTimer`)를 Apps Script의 무상태 실행에 맞게
+      "매 호출마다 hydrate → 로직 → (호출자가) flush" 패턴으로 새로 작성했다(로컬 버전을
+      베끼지 않고 새로 씀). `randomUUID()` 대신 주입된 `UuidGenerator`를 쓴다. 이 파일 자체는
+      자동 저장을 하지 않는다는 것을 문서 주석으로 명시했다 — `saveSession` 호출은 호출자
+      (다음 작업의 dispatch 계층)의 책임.
+- [x] `src/appsScript/gasTokenStore.ts` (신규): `src/server/tokenStore.ts`와 같은 역할,
+      `TOKENS_SHEET` 기반 `issueToken`/`resolvePlayerId`(loose join, 세션 범위로 스코프).
+- [x] 테스트: `tests/appsScript/sheetSchema.test.ts`(10개, 셀 크기 회귀 포함),
+      `tests/appsScript/gasSessionStore.test.ts`(5개, 인메모리 `FakeSpreadsheetGateway`로
+      "완전히 새로운 요청" 시뮬레이션 — 세션 생성/재조회, 로비 미제출 학생 영구 제외가
+      hydrate/flush 왕복 후에도 유지되는지, 버퍼링된 제출값이 유실 없이 이어지는지,
+      RoundMetrics가 라운드당 정확히 1행만 append되는지), `tests/appsScript/gasTokenStore.test.ts`
+      (4개, 지시서에는 없었지만 신규 코드 커버리지를 위해 추가), `tests/multiplayer/gameSession.test.ts`
+      에 `exportPendingSubmissions`/`resumeFromState(pending)` 단위 테스트 3개 추가.
+      전체 테스트 358개(기존 336 + 신규 22) 통과.
+- [x] 검증: `npm run typecheck`(양쪽 tsconfig, `src/appsScript/*`는 기존 `tsconfig.json`의
+      `include: ["src", ...]`에 자동으로 포함됨 — tsconfig 자체는 건드리지 않음),
+      `npm run lint -- --max-warnings=0`, `npm test -- --run`(358개), `npm run build`
+      (76 모듈, 기존과 동일 — `src/appsScript/*`가 클라이언트 번들에 섞이지 않음) 모두 직접
+      실행해 통과 확인. `git diff --stat -- src/engine src/economy src/npc src/advisor src/server`
+      결과 무변경 확인.
+### 2부 — 요청 디스패치, 실제 진입점, 빌드/타입체크 파이프라인 (실제 배포는 여전히 없음, D-032)
+
+목표: 1부의 상태 계층을 실제로 호출하는 `doGet`/`doPost` 진입점과, 그것을 Apps Script에
+붙여넣을 수 있는 단일 파일로 번들링하는 빌드 스크립트를 완성한다. 이번에도 실제 Google
+계정/OAuth/배포/Sheets API 호출은 하지 않았다. `src/server/*`와 경제 엔진
+(`src/engine`/`src/economy`/`src/npc`/`src/advisor`)은 한 글자도 건드리지 않았다
+(`git diff --stat`으로 확인).
+
+- [x] `src/appsScript/requestAdapter.ts` (신규): Apps Script `doGet`/`doPost` 이벤트 객체
+      (`e.parameter` / `e.postData.contents`)를 `src/server/httpApi.ts`가 기대하는
+      `ApiRequest`로 변환하는 순수 함수 `buildApiRequestFromGet`/`buildApiRequestFromPost`.
+      Apps Script Web App은 커스텀 헤더/경로 세그먼트 라우팅이 없으므로, `path`와 인증
+      토큰을 GET은 쿼리 파라미터, POST는 JSON 바디의 명시적 필드로 실어 나르고
+      `"Bearer <token>"` 형태의 `Authorization` 헤더로 재조립한다. 실제 `GoogleAppsScript.*`
+      전역 타입은 import하지 않고 구조적으로 호환되는 narrow 타입만 정의해, 기본 tsconfig로도
+      타입체크되고 vitest로 직접 테스트할 수 있게 했다.
+- [x] `src/appsScript/dispatch.ts` (신규): 요청 하나를 끝까지 처리하는 오케스트레이션
+      `dispatchApiRequest(deps, request)`. `LockLike.waitLock`으로 감싸 동시 쓰기를 막고
+      (타임아웃 시 503, 안전망으로 처리하되 예외로 전파하지 않음), 요청 처리 직전/직후에
+      `configureSessionRegistryAdapter`/`flushSessionRegistryAdapter`를 호출해 세션 저장소의
+      hydrate/flush 생명주기를 관리한다. 실제 라우팅 함수(`src/server/httpApi.ts`의
+      `handleApiRequest`)는 인자로 주입받는다 — 이 파일 자체는 그 함수를 import하지 않는다.
+- [x] `src/appsScript/sessionRegistryAdapter.ts` (신규): `src/server/httpApi.ts`가 내부적으로
+      import하는 `./sessionRegistry.js`를 대신할 수 있도록 정확히 같은 이름/시그니처
+      (`createSession`/`getSession`/`isLobbyOpen`/`markLobbyClosedIfNeeded`/`syncPhaseTimer`,
+      `SessionEntry`)를 내보내는 얇은 wrapper. 내부적으로는 `gasSessionStore.ts`를 매 호출마다
+      hydrate하고, `dispatch.ts`가 호출하는 `flushSessionRegistryAdapter`가 "이번 요청에서
+      마지막으로 다룬 세션 하나"를 시트에 다시 쓴다(이 프로젝트의 API가 한 요청당 세션을
+      최대 하나만 다룬다는 전제에 기댄다). **핵심 설계 결정**: `httpApi.ts` 소스 자체는 전혀
+      건드리지 않는다 — 이 alias 치환은 `scripts/build-apps-script.ts`의 esbuild
+      `onResolve` 훅이 번들링 시점에만 적용하고, `npm run typecheck`/vitest에서는
+      `httpApi.ts`가 계속 진짜 `src/server/sessionRegistry.ts`(로컬 인메모리, `node:crypto`
+      의존)를 참조한 채로 타입체크/실행된다.
+- [x] `src/appsScript/entry.ts` (신규): 실제 Apps Script Web App 진입점. `SpreadsheetApp`/
+      `LockService`/`Utilities`/`ContentService` 전역을 감싸는 `hostInterfaces.ts` 구현체
+      (`realGateway`/`realLock`/`realUuidGen`)만 이 파일에 두고, 실제 로직은 전부
+      `requestAdapter.ts`/`dispatch.ts`에 위임했다. `doGet`/`doPost`를 `globalThis`에 직접
+      대입해 esbuild IIFE 번들 안에서도 Apps Script가 전역 함수로 인식하도록 했다(번들
+      후처리 footer 불필요). **실제 배포 전까지 검증 불가능한 리스크로 명시적으로 기록**:
+      Apps Script의 `doGet`/`doPost`가 `async` 함수가 반환하는 Promise를 실제로 기다려주는지
+      문서/커뮤니티 사례가 엇갈려 코드로 확인할 방법이 없다 — v1은 "지원된다"고 가정한다.
+      Apps Script Web App은 응답의 실제 HTTP 상태 코드를 커스터마이즈할 수 없어(`ContentService`
+      응답은 항상 200), 의도한 상태 코드를 JSON 바디의 `status` 필드로 함께 실어 보낸다.
+- [x] `scripts/build-apps-script.ts` (신규): esbuild Node API로 `src/appsScript/entry.ts`를
+      `format: "iife"`, `target: "es2019"`로 번들링해 `dist/apps-script/Code.gs.js`를
+      만든다. esbuild `onResolve` 플러그인으로 `httpApi.ts`가 참조하는 `./sessionRegistry.js`
+      임포트 하나만 `sessionRegistryAdapter.ts`로 치환한다(위 설계 결정 참고). 테스트에서
+      서브프로세스 없이 직접 호출할 수 있도록 번들링 로직을 `buildAppsScript()` 함수로
+      내보내고, CLI로 직접 실행될 때만(`process.argv[1]`이 이 파일 자신일 때) 그 함수를
+      호출하도록 분리했다(Windows에서 `execFileSync("npx", ...)`가 `ENOENT`로 실패하는
+      크로스플랫폼 문제를 피하기 위함 — 애초에 서브프로세스를 안 쓰는 쪽을 택함).
+      `npm run build:apps-script` 스크립트로 등록했다.
+- [x] `tsconfig.appsScript.json` (신규): 루트 `tsconfig.json`을 `extends`하되
+      `include: ["src/appsScript/entry.ts"]`로 entry.ts 하나만 루트로 잡는다.
+      `compilerOptions.types`를 `["google-apps-script", "node"]`로 좁혔다 — 구현 중 발견한
+      문제: 지시서는 `["google-apps-script"]`만 요구했지만, `entry.ts`가 값으로 import하는
+      `httpApi.ts`가 (alias 없이, 진짜) `sessionRegistry.ts`/`tokenStore.ts`를 타입 그래프에
+      끌어들이고 그 두 파일은 `node:crypto`를 import하므로, `types`에서 `"node"`를 빼면
+      "Cannot find module 'node:crypto'" 타입 오류가 난다 — CLAUDE.md 4절 기준 명확한 설정
+      버그라 판단해 `"node"`를 추가했다(경제 로직과 무관, 자동 수정 대상). `package.json`의
+      `typecheck` 스크립트 끝에 `tsc -p tsconfig.appsScript.json --noEmit` 단계를 추가했다.
+- [x] `src/appsScript/appsscript.manifest.example.json` (신규, 빌드 산출물 아님): 사용자가
+      실제 Apps Script 프로젝트에 참고할 매니페스트 템플릿(`timeZone`, `exceptionLogging`,
+      `runtimeVersion`, `webapp.executeAs: "USER_DEPLOYING"`, `webapp.access:
+      "ANYONE_ANONYMOUS"`).
+- [x] lint 정리(구현 중단 시점에 남아있던 경고 2건): `entry.ts`의 `no-var` eslint-disable
+      주석 2개는 실제로는 불필요했다(이 프로젝트의 `eslint.config.js`가 typescript-eslint
+      recommended만 켜고 core ESLint의 `no-var`는 켜지 않으므로) — 주석만 제거.
+      `sessionRegistryAdapter.ts`의 `toGasEntry`가 `const { tokens: _tokens, ...rest } = entry`
+      로 `tokens` 필드를 제외하던 방식은 이 프로젝트 eslint 설정의 `no-unused-vars`가
+      `argsIgnorePattern: "^_"`만 두고 `varsIgnorePattern`은 안 둬서 구조분해 변수엔 `_` 관례가
+      안 먹혀 경고가 났다 — 설정을 바꾸지 않고 필드를 전부 나열해 객체를 새로 만드는 방식으로
+      바꿔 변수 자체를 없앴다.
+- [x] 테스트(신규 4개 파일, 총 27개): `tests/appsScript/requestAdapter.test.ts`(9개 — GET/POST
+      각각 정상 변환·인증 헤더 조립·`path` 누락/`e.parameter` 자체 누락/JSON 파싱 실패/필수
+      필드 누락의 400 처리), `tests/appsScript/dispatch.test.ts`(5개 — 가짜 락으로 락 획득 성공
+      시 핸들러 호출 후 해제, 락 타임아웃 시 핸들러 미호출·해제 안 함·503, 핸들러 예외 시에도
+      해제·500, 그리고 진짜 `src/server/httpApi.ts`의 `handleApiRequest`를 주입해 세션 생성
+      201/알 수 없는 라우트 404까지 실제 라우팅 경로로 확인 — 이 경로는 로컬 인메모리
+      `sessionRegistry.ts`를 그대로 타므로 "배선이 문제없다"만 검증하고 시트 연동 자체는
+      검증하지 않는다), `tests/appsScript/bundle.test.ts`(4개 — `buildAppsScript()`를 실제로
+      호출해 `dist/apps-script/Code.gs.js` 생성 확인, `import`/`export`/`require` 토큰
+      부재 확인, `globalThis.doGet`/`globalThis.doPost` 대입 확인, IIFE로 감싸졌는지 확인).
+      전체 테스트 376개(기존 358 + 신규 18, 위 `dispatch.test.ts`/`requestAdapter.test.ts`/
+      `bundle.test.ts` 합계) 통과.
+- [x] 검증: `npm run typecheck`(세 tsconfig 모두), `npm run lint -- --max-warnings=0`,
+      `npm test -- --run`(376개), `npm run build`(76 모듈, 기존과 동일 — `src/appsScript/*`가
+      클라이언트 번들에 안 섞임), `npm run build:apps-script`(`dist/apps-script/Code.gs.js`
+      85.3kb 생성) 모두 직접 실행해 통과/생성 확인. `git diff --stat -- src/engine
+      src/economy src/npc src/advisor src/server` 결과 무변경 확인.
+- [x] `ROUND_SUMMARY_SHEET` 실제 연결 — 1부·2부에서 두 번 이월됐던 항목을 오케스트레이터가
+      마저 처리했다. `gasSessionStore.ts#saveSession`이 새 라운드가 처음 확정되는 그 조건
+      (기존 `RoundMetrics` 중복 방지 조건과 동일)에서 `buildRoundSummaryRows`를 호출해
+      `ROUND_SUMMARY_SHEET`에 append하도록 한 줄 추가. `tests/appsScript/gasSessionStore.test.ts`에
+      회귀 테스트 1개 추가(라운드 확정 시 행 생성 확인, 같은 라운드 재저장 시 중복 없음 확인).
+      전체 377개 테스트, `typecheck`(세 tsconfig)·`lint`·`build`·`build:apps-script` 모두
+      재검증 통과.
+- [ ] **이번에도 다루지 않은 것(다음 작업)**: 실제 Google 계정/OAuth/배포/Sheets API 호출
+      (근본적으로 이 리포지토리 안에서는 검증 불가능 — `entry.ts`의 문서 주석 참고),
+      Apps Script용 `sessionClient.ts`(학생 클라이언트가 응답 바디의 `status` 필드로
+      성공/실패를 판단하는 계층), 실제 배포 가이드 문서.
+
 ## Milestone 6 — UX 개선, 밸런싱, 교육 기능 확장
 
 - [ ] 4~7라운드 커리큘럼 차별화(사업 확장/경쟁 전략/시장 변화) — Milestone 2까지는 전 라운드가

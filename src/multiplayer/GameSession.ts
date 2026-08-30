@@ -45,6 +45,22 @@ export interface StepOutcome {
   gameOver: boolean;
 }
 
+/**
+ * `GameSession`이 phase 진행 중 메모리에만 들고 있는 버퍼링된 제출값과 로비 확정 상태의
+ * 스냅숏 (Milestone 5, D-032). Apps Script처럼 요청마다 인스턴스가 통째로 사라지는 무상태
+ * 실행 환경에서, 이 값들을 외부(시트)에 저장했다가 다음 요청에서 복원하기 위한 것이다.
+ * `GameState`(엔진이 아는 것) 자체에는 이 정보를 넣지 않는다 — "GameState는 누가 사람인지
+ * 담지 않는다"는 기존 원칙과 일관되게 별도 타입으로 관리한다.
+ */
+export interface PendingSubmissionsSnapshot {
+  companyInputs: Record<ParticipantId, CompanyDecisionInput>;
+  storeRequests: Record<ParticipantId, StoreDecisionInput>;
+  householdRequests: Record<ParticipantId, PurchaseRequestLine[]>;
+  acknowledgedRoundResultPlayerIds: ParticipantId[];
+  humanPlayerIds: ParticipantId[];
+  lobbyMembershipFinalized: boolean;
+}
+
 /** 사람 입력이 필요한 phase에서, 아직 제출하지 않았는지 여부. */
 const PHASES_REQUIRING_HUMAN_INPUT: readonly RoundPhase[] = [
   "company-turn",
@@ -114,12 +130,18 @@ export class GameSession {
    * `studentCount > 1`일 때는 setupChoices를 아예 적용하지 않고 엔진의 기본 배정
    * (buildInitialGameState의 카테고리/상권 순환 배정)을 그대로 쓴다 — 특정 학생 한 명에게만
    * 적용하면 나머지 학생과 취급이 달라져 오히려 혼란스럽다고 판단했다.
+   *
+   * `pending`은 맨 뒤에 추가했다(Milestone 5, D-032) — Apps Script 환경에서 이전 요청이
+   * 내보낸 `PendingSubmissionsSnapshot`(제출 버퍼 + 로비 확정 상태)을 그대로 복원해 이어서
+   * 쓰기 위한 것으로, 보통 `resumeState`와 함께 쓰인다. 생략하면(기존 모든 호출부가 그렇듯)
+   * 완전히 빈 제출 버퍼로 시작하는 기존 동작 그대로다.
    */
   constructor(
     rngSeed: number = Date.now(),
     setupChoices?: BusinessSetupChoices,
     resumeState?: GameState,
     studentCount: number = 1,
+    pending?: PendingSubmissionsSnapshot,
   ) {
     this.state = resumeState ?? buildInitialGameState(studentCount, rngSeed);
     this.humanPlayers = this.state.players;
@@ -129,6 +151,10 @@ export class GameSession {
 
     if (setupChoices && !resumeState && this.humanPlayers.length === 1) {
       this.applyBusinessSetupChoices(this.humanPlayers[0]!.id, setupChoices);
+    }
+
+    if (pending) {
+      this.restorePendingSubmissions(pending);
     }
 
     const decisionSource: HumanDecisionSource = {
@@ -144,9 +170,14 @@ export class GameSession {
     this.engine = new RoundEngine(this.state, createPhaseHandlers(rng, decisionSource));
   }
 
-  /** 저장된 GameState로부터 세션을 이어서 만든다 (브라우저 새로고침 등으로 끊긴 게임 복원). */
-  static resumeFromState(savedState: GameState): GameSession {
-    return new GameSession(savedState.config.rngSeed, undefined, savedState);
+  /**
+   * 저장된 GameState로부터 세션을 이어서 만든다 (브라우저 새로고침 등으로 끊긴 게임 복원).
+   * `pending`을 생략하면 기존 호출부(로컬 서버의 새로고침 복원 경로 포함)와 완전히 동일하게
+   * 빈 제출 버퍼로 재개한다 — Apps Script 세션 저장소(Milestone 5)만 `pending`을 넘겨
+   * 라운드 도중 버퍼링된 제출값과 로비 확정 상태까지 이어서 복원한다.
+   */
+  static resumeFromState(savedState: GameState, pending?: PendingSubmissionsSnapshot): GameSession {
+    return new GameSession(savedState.config.rngSeed, undefined, savedState, 1, pending);
   }
 
   /**
@@ -218,6 +249,48 @@ export class GameSession {
     if (remaining.length === this.humanPlayers.length) return;
     this.humanPlayers = remaining;
     this.notify();
+  }
+
+  /**
+   * 생성자에서만 호출된다(Milestone 5, D-032) — `pending`으로 받은 스냅숏을 내부 Map/Set/
+   * `humanPlayers`에 주입해 복원한다. `humanPlayerIds`는 `this.state.players`(항상 세션
+   * 생성 시점의 전체 학생 목록을 담는, `finalizeLobbyMembership`이 지나도 바뀌지 않는 배열)
+   * 에서 id로 다시 찾아 재구성한다 — 유령 처리(D-031)로 이미 제외된 학생이 있었다면
+   * `humanPlayerIds`가 그 부분집합이므로 자연히 다시 제외된 채로 복원된다.
+   */
+  private restorePendingSubmissions(pending: PendingSubmissionsSnapshot): void {
+    for (const [companyId, input] of Object.entries(pending.companyInputs)) {
+      this.pendingCompanyInputs.set(companyId, input);
+    }
+    for (const [storeId, input] of Object.entries(pending.storeRequests)) {
+      this.pendingStoreRequests.set(storeId, input);
+    }
+    for (const [householdId, lines] of Object.entries(pending.householdRequests)) {
+      this.pendingHouseholdRequests.set(householdId, lines);
+    }
+    for (const playerId of pending.acknowledgedRoundResultPlayerIds) {
+      this.acknowledgedRoundResultPlayerIds.add(playerId);
+    }
+    this.lobbyMembershipFinalized = pending.lobbyMembershipFinalized;
+    this.humanPlayers = pending.humanPlayerIds
+      .map((id) => this.state.players.find((p) => p.id === id))
+      .filter((player): player is PlayerState => player !== undefined);
+  }
+
+  /**
+   * 현재 버퍼링된 제출값과 로비 확정 상태를 스냅숏으로 내보낸다(Milestone 5, D-032). Apps
+   * Script처럼 요청이 끝나면 이 인스턴스가 사라지는 환경에서, 다음 요청이
+   * `GameSession.resumeFromState(state, 이 값)`으로 이어받기 위한 것이다.
+   */
+  exportPendingSubmissions(): PendingSubmissionsSnapshot {
+    return {
+      companyInputs: Object.fromEntries(this.pendingCompanyInputs),
+      storeRequests: Object.fromEntries(this.pendingStoreRequests),
+      householdRequests: Object.fromEntries(this.pendingHouseholdRequests),
+      acknowledgedRoundResultPlayerIds: [...this.acknowledgedRoundResultPlayerIds],
+      humanPlayerIds: this.humanPlayers.map((p) => p.id),
+      lobbyMembershipFinalized: this.lobbyMembershipFinalized,
+    };
   }
 
   getState(): Readonly<GameState> {
