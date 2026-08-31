@@ -68,6 +68,11 @@ export interface CompanyState {
   inventoryQuantity: number;
   /** company-turn에서 결정한 도매 판매가. wholesale-market-update가 이 값으로 상장한다. */
   lastWholesalePrice: number;
+  /**
+   * 이 기업이 마지막으로 업종을 전환한 라운드 (Milestone 6). 아직 한 번도 전환하지 않았으면
+   * null. NPC 전환 쿨다운(docs/DECISIONS.md D-033) 판단에 쓰인다.
+   */
+  lastIndustrySwitchRound: number | null;
 }
 
 export interface StoreState {
@@ -77,13 +82,28 @@ export interface StoreState {
   districtId: DistrictId;
   ledger: Ledger;
   strategyId: StrategyId;
+  /** 등록된 전문 업종(정체성). 업종 전환 비용 계산의 기준(이전 카테고리)이 되는 것은
+   * currentSellingCategoryId이지, 이 필드가 아니다 — 이 필드는 "이 가게가 어떤 업종으로
+   * 창업했는가"를 그대로 보존한다 (Milestone 6). */
   specialtyCategoryId: ProductCategoryId | null;
+  /**
+   * 이번 라운드 실제 판매 카테고리 (Milestone 6). null이면 아직 전문 업종에서 이탈한 적이
+   * 없다는 뜻이며, 이 경우 실제 판매 카테고리는 specialtyCategoryId를 그대로 쓴다
+   * (`store.currentSellingCategoryId ?? store.specialtyCategoryId`). 전문 업종과 다르면
+   * 소비자 매력도 페널티(specialtyMismatchPenalty)가 적용된다.
+   */
+  currentSellingCategoryId: ProductCategoryId | null;
   /** 매입해 판매 중인 재고 수량 (다음 라운드로 이월). */
   inventoryQuantity: number;
   /** 현재 재고의 가중평균 품질 (0~1). */
   inventoryQuality: number;
   /** 현재 소매 판매가 (가게 턴에서 결정). */
   retailPrice: number;
+  /**
+   * 이 가게가 마지막으로 판매 카테고리를 변경한 라운드 (Milestone 6). 아직 한 번도 변경하지
+   * 않았으면 null. 사람/NPC 모두 동일한 쿨다운 판단에 쓰인다 (docs/DECISIONS.md D-033).
+   */
+  lastSellingCategoryChangeRound: number | null;
 }
 
 export interface HouseholdState {

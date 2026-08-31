@@ -139,6 +139,7 @@ describe("appsScript/sheetSchema", () => {
           quality: 0.5,
           inventoryQuantity: 0,
           lastWholesalePrice: 0,
+          lastIndustrySwitchRound: null,
         },
       },
       stores: {
@@ -150,9 +151,11 @@ describe("appsScript/sheetSchema", () => {
           ledger: { cash: 1000, cumulativeProfit: 0 },
           strategyId: "stable",
           specialtyCategoryId: "food",
+          currentSellingCategoryId: null,
           inventoryQuantity: 0,
           inventoryQuality: 0.5,
           retailPrice: 0,
+          lastSellingCategoryChangeRound: null,
         },
       },
       households: {

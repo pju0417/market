@@ -36,7 +36,7 @@ export function analyzeStoreTurn(
     throw new Error(`analyzeStoreTurn: unknown storeId "${storeId}"`);
   }
 
-  const categoryId = store.specialtyCategoryId;
+  const categoryId = store.currentSellingCategoryId ?? store.specialtyCategoryId;
   const lastMetrics = state.roundMetrics.at(-1);
   const hasHistory = lastMetrics !== undefined && storeId in lastMetrics.storeProfit;
 
@@ -104,7 +104,14 @@ export function analyzeStoreTurn(
   }
 
   if (categoryId !== null) {
-    situationSummary.push(`가게는 전문 업종(${CATEGORY_NAMES_KO[categoryId]}) 안에서만 매입·판매할 수 있습니다.`);
+    if (categoryId === store.specialtyCategoryId) {
+      situationSummary.push(`현재 전문 업종(${CATEGORY_NAMES_KO[categoryId]}) 안에서 매입·판매하고 있습니다.`);
+    } else {
+      situationSummary.push(
+        `현재 전문 업종(${store.specialtyCategoryId !== null ? CATEGORY_NAMES_KO[store.specialtyCategoryId] : "-"})을 벗어나 ` +
+          `${CATEGORY_NAMES_KO[categoryId]}를 판매하고 있습니다 (4라운드부터 가능, 소비자 매력도 페널티가 적용됩니다).`,
+      );
+    }
   } else {
     situationSummary.push("아직 전문 업종을 정하지 않았습니다.");
   }

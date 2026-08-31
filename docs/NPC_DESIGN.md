@@ -52,4 +52,10 @@ NPC/학생 봇의 생산·매입은 "적정 재고까지만 채운다"(order-up-
 바뀌지 않았다 — 실제 원인은 고정비 대비 초기 자본 규모로 보인다 ([DECISIONS.md](DECISIONS.md)
 D-019 참고).
 
-**v1 범위 밖**: NPC/학생 봇은 게임 중 업종을 바꾸지 않는다.
+**Milestone 6부터(D-033)**: NPC 기업/가게는 더 이상 업종을 절대 바꾸지 않는 것이 아니다.
+`MIN_ROUND_FOR_INDUSTRY_ACTIONS`(4)라운드부터, 최근 `consecutiveNegativeProfitRounds`(2)라운드
+연속 적자였고 쿨다운(`cooldownRounds`=2) 중이 아니면, `switchProbability`(0.5)의 확률로
+`decideCompanyIndustrySwitch`/`decideStoreSpecialtyDeviation`(둘 다 `src/npc/decisions.ts`)이
+가장 예상 마진이 높은 카테고리로 전환을 시도한다. 여전히 규칙 기반(결정론적 rng)이며, 사람이
+실제로 입력을 제출한 경우(생산/매입 입력만 냈고 전환 필드를 비운 경우 포함) 이 로직은 절대
+호출되지 않는다 — 봇이 학생의 "전환 안 함" 선택을 뒤집지 않는다.

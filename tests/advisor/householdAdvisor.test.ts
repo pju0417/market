@@ -33,9 +33,11 @@ function makeStore(id: string, ownerId: string): StoreState {
     ledger: { cash: 500, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 10,
     inventoryQuality: 0.5,
     retailPrice: 10,
+    lastSellingCategoryChangeRound: null,
   };
 }
 

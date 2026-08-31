@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
 import {
+  industrySwitchCost,
+  MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+  NPC_INDUSTRY_SWITCH_RULES,
+  NPC_STORE_SPECIALTY_DEVIATION_RULES,
+  specialtyMismatchPenalty,
+} from "../../src/economy/config.js";
+import {
+  decideCompanyIndustrySwitch,
   decideCompanyProduction,
   decideHouseholdPurchases,
   decideStorePurchases,
+  decideStoreSpecialtyDeviation,
   scoreListingForBuyer,
 } from "../../src/npc/decisions.js";
-import type { CompanyState, HouseholdState, RetailListing, StoreState, WholesaleListing } from "../../src/types/domain.js";
+import type {
+  CompanyState,
+  GameState,
+  HouseholdState,
+  RetailListing,
+  RoundMetrics,
+  StoreState,
+  WholesaleListing,
+} from "../../src/types/domain.js";
 
 function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
   return {
@@ -20,6 +37,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     quality: 0,
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
+    lastIndustrySwitchRound: null,
     ...overrides,
   };
 }
@@ -33,9 +51,11 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     ledger: { cash: 1000, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 0,
     inventoryQuality: 0,
     retailPrice: 0,
+    lastSellingCategoryChangeRound: null,
     ...overrides,
   };
 }
@@ -49,6 +69,52 @@ function makeHousehold(overrides: Partial<HouseholdState> = {}): HouseholdState 
     strategyId: "stable",
     budgetPerRound: 100,
     satisfactionScore: 0,
+    ...overrides,
+  };
+}
+
+function makeRoundMetrics(round: number, overrides: Partial<RoundMetrics> = {}): RoundMetrics {
+  return {
+    round,
+    companyProfit: {},
+    storeProfit: {},
+    companyMarketShare: {},
+    storeMarketShare: {},
+    totalWholesaleVolume: 0,
+    totalWholesaleValue: 0,
+    totalRetailVolume: 0,
+    totalRetailValue: 0,
+    averageHouseholdSatisfaction: 0,
+    companyUnitsProduced: {},
+    companyUnitsSoldWholesale: {},
+    companyRevenue: {},
+    storeUnitsPurchased: {},
+    storeWholesaleSpend: {},
+    storeUnitsSoldRetail: {},
+    storeRevenue: {},
+    storeSupplierCount: {},
+    storeTopSupplierSpendShare: {},
+    householdSpend: {},
+    householdUnitsBought: {},
+    householdCategoryCount: {},
+    householdTopCategorySpendShare: {},
+    householdEssentialCategoriesMissed: {},
+    ...overrides,
+  };
+}
+
+function makeGameState(overrides: Partial<GameState> = {}): GameState {
+  return {
+    config: { totalRounds: 7, studentPlayerIds: [], rngSeed: 1 },
+    currentRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+    currentPhase: "company-turn",
+    players: [],
+    companies: {},
+    stores: {},
+    households: {},
+    wholesaleListings: [],
+    retailListings: [],
+    roundMetrics: [],
     ...overrides,
   };
 }
@@ -89,6 +155,283 @@ describe("decideCompanyProduction", () => {
 
     expect(stockedDecision!.quantity).toBeLessThan(freshDecision!.quantity);
     expect(stockedDecision!.quantity).toBe(0);
+  });
+});
+
+describe("decideCompanyIndustrySwitch (Milestone 6, D-033)", () => {
+  const negativeProfitHistory = (companyId: string): RoundMetrics[] =>
+    Array.from({ length: NPC_INDUSTRY_SWITCH_RULES.consecutiveNegativeProfitRounds }, (_, i) =>
+      makeRoundMetrics(i + 1, { companyProfit: { [companyId]: -10 } }),
+    );
+
+  it("never switches before minRound, even with every other condition favorable", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food" });
+    const state = makeGameState({
+      currentRound: NPC_INDUSTRY_SWITCH_RULES.minRound - 1,
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("does not switch when profit history doesn't show consecutiveNegativeProfitRounds of losses", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    const state = makeGameState({
+      roundMetrics: [
+        makeRoundMetrics(1, { companyProfit: { c1: -10 } }),
+        makeRoundMetrics(2, { companyProfit: { c1: 5 } }), // most recent round was profitable
+      ],
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("does not switch when there isn't enough round history yet", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food" });
+    const state = makeGameState({ roundMetrics: [makeRoundMetrics(1, { companyProfit: { c1: -10 } } )] });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("stays put while still inside the post-switch cooldown", () => {
+    const company = makeCompany({
+      id: "c1",
+      productCategoryId: "food",
+      lastIndustrySwitchRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+    });
+    const state = makeGameState({
+      currentRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS + NPC_INDUSTRY_SWITCH_RULES.cooldownRounds - 1,
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("does not switch when the probability roll fails (rng >= switchProbability)", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => NPC_INDUSTRY_SWITCH_RULES.switchProbability);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("excludes candidate categories with no wholesale market data", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    // Only "toys" has any wholesale listings; apparel/electronics have none and must be skipped.
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("toys");
+  });
+
+  it("does not switch when no candidate category has any market data at all", () => {
+    const company = makeCompany({ id: "c1", productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    const state = makeGameState({ roundMetrics: negativeProfitHistory("c1"), wholesaleListings: [] });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("picks the candidate category with the highest estimated margin", () => {
+    const company = makeCompany({
+      id: "c1",
+      productCategoryId: "food",
+      districtId: "downtown",
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+    });
+    // Both apparel and toys have wholesale data at the same average price (50), but toys has a
+    // higher unit cost at this district, so apparel's estimated margin is strictly higher.
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [
+        { id: "w-apparel", companyId: "other", categoryId: "apparel", quantityAvailable: 10, quality: 0.5, price: 50 },
+        { id: "w-toys", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 50 },
+      ],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("apparel");
+  });
+
+  it("rejects the switch (stays put) when the switch cost exceeds current cash", () => {
+    const cost = industrySwitchCost("food", "toys");
+    const company = makeCompany({ id: "c1", productCategoryId: "food", ledger: { cash: cost - 1, cumulativeProfit: 0 } });
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("food");
+    expect(company.ledger.cash).toBe(cost - 1);
+  });
+
+  it("on a confirmed switch, charges exactly the switch cost and force-resets inventory/quality (B안)", () => {
+    const cost = industrySwitchCost("food", "toys");
+    const company = makeCompany({
+      id: "c1",
+      productCategoryId: "food",
+      inventoryQuantity: 40,
+      quality: 0.7,
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+    });
+    const state = makeGameState({
+      currentRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+      roundMetrics: negativeProfitHistory("c1"),
+      wholesaleListings: [{ id: "w1", companyId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 1000 }],
+    });
+    decideCompanyIndustrySwitch(company, state, () => 0);
+
+    expect(company.productCategoryId).toBe("toys");
+    expect(company.ledger.cash).toBe(1000 - cost);
+    expect(company.inventoryQuantity).toBe(0);
+    expect(company.quality).toBe(0);
+    expect(company.lastIndustrySwitchRound).toBe(MIN_ROUND_FOR_INDUSTRY_ACTIONS);
+  });
+});
+
+describe("decideStoreSpecialtyDeviation (Milestone 6, D-033)", () => {
+  const negativeProfitHistory = (storeId: string): RoundMetrics[] =>
+    Array.from({ length: NPC_STORE_SPECIALTY_DEVIATION_RULES.consecutiveNegativeProfitRounds }, (_, i) =>
+      makeRoundMetrics(i + 1, { storeProfit: { [storeId]: -10 } }),
+    );
+
+  it("never switches before minRound", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({
+      currentRound: NPC_STORE_SPECIALTY_DEVIATION_RULES.minRound - 1,
+      roundMetrics: negativeProfitHistory("s1"),
+      wholesaleListings: [{ id: "w1", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [{ id: "r1", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("does not switch without consecutiveNegativeProfitRounds of losses", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({
+      roundMetrics: [
+        makeRoundMetrics(1, { storeProfit: { s1: -10 } }),
+        makeRoundMetrics(2, { storeProfit: { s1: 5 } }),
+      ],
+      wholesaleListings: [{ id: "w1", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [{ id: "r1", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("stays put while still inside the post-switch cooldown", () => {
+    const store = makeStore({
+      id: "s1",
+      specialtyCategoryId: "food",
+      currentSellingCategoryId: "food",
+      lastSellingCategoryChangeRound: NPC_STORE_SPECIALTY_DEVIATION_RULES.minRound,
+    });
+    const state = makeGameState({
+      currentRound: NPC_STORE_SPECIALTY_DEVIATION_RULES.minRound + NPC_STORE_SPECIALTY_DEVIATION_RULES.cooldownRounds - 1,
+      roundMetrics: negativeProfitHistory("s1"),
+      wholesaleListings: [{ id: "w1", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [{ id: "r1", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBe("food");
+  });
+
+  it("does not switch when the probability roll fails", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("s1"),
+      wholesaleListings: [{ id: "w1", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [{ id: "r1", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => NPC_STORE_SPECIALTY_DEVIATION_RULES.switchProbability);
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("excludes a candidate category missing either wholesale or retail market data", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("s1"),
+      // toys has both sides of data; apparel only has retail data (no wholesale quote) and must
+      // be excluded even though its retail price looks attractive.
+      wholesaleListings: [{ id: "w-toys", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [
+        { id: "r-toys", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 },
+        { id: "r-apparel", storeId: "other", categoryId: "apparel", quantityAvailable: 10, quality: 0.5, price: 1000 },
+      ],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBe("toys");
+  });
+
+  it("does not switch when no candidate category has both wholesale and retail data", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({ roundMetrics: negativeProfitHistory("s1"), wholesaleListings: [], retailListings: [] });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("picks the candidate category with the highest estimated margin (retail price - wholesale cost)", () => {
+    const store = makeStore({ id: "s1", specialtyCategoryId: "food" });
+    const state = makeGameState({
+      roundMetrics: negativeProfitHistory("s1"),
+      wholesaleListings: [
+        { id: "w-apparel", companyId: "c", categoryId: "apparel", quantityAvailable: 10, quality: 0.5, price: 10 },
+        { id: "w-toys", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 },
+      ],
+      retailListings: [
+        { id: "r-apparel", storeId: "other", categoryId: "apparel", quantityAvailable: 10, quality: 0.5, price: 30 }, // margin 20
+        { id: "r-toys", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }, // margin 15
+      ],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBe("apparel");
+  });
+
+  it("on a confirmed switch, force-resets inventory/quality to 0 with no cost charged (B안)", () => {
+    const store = makeStore({
+      id: "s1",
+      specialtyCategoryId: "food",
+      inventoryQuantity: 25,
+      inventoryQuality: 0.6,
+      ledger: { cash: 500, cumulativeProfit: 0 },
+    });
+    const state = makeGameState({
+      currentRound: NPC_STORE_SPECIALTY_DEVIATION_RULES.minRound,
+      roundMetrics: negativeProfitHistory("s1"),
+      wholesaleListings: [{ id: "w1", companyId: "c", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 5 }],
+      retailListings: [{ id: "r1", storeId: "other", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 20 }],
+    });
+    decideStoreSpecialtyDeviation(store, state, () => 0);
+
+    expect(store.currentSellingCategoryId).toBe("toys");
+    expect(store.inventoryQuantity).toBe(0);
+    expect(store.inventoryQuality).toBe(0);
+    expect(store.ledger.cash).toBe(500);
+    expect(store.lastSellingCategoryChangeRound).toBe(NPC_STORE_SPECIALTY_DEVIATION_RULES.minRound);
   });
 });
 
@@ -157,7 +500,7 @@ describe("decideHouseholdPurchases", () => {
     ];
     const rng = createRng(1);
 
-    const decision = decideHouseholdPurchases(household, 25, listings, rng);
+    const decision = decideHouseholdPurchases(household, 25, listings, {}, rng);
     const totalSpent = decision.purchases.reduce((sum, p) => sum + p.quantity * p.unitPrice, 0);
 
     expect(totalSpent).toBeLessThanOrEqual(25);
@@ -167,7 +510,7 @@ describe("decideHouseholdPurchases", () => {
     const household = makeHousehold();
     const rng = createRng(1);
 
-    const decision = decideHouseholdPurchases(household, 100, [], rng);
+    const decision = decideHouseholdPurchases(household, 100, [], {}, rng);
 
     expect(decision.purchases).toHaveLength(0);
   });
@@ -187,7 +530,7 @@ describe("decideHouseholdPurchases", () => {
 
     // Ample cash: candidates are bought in descending score order, so the first purchase
     // reveals the top-ranked listing directly.
-    const decision = decideHouseholdPurchases(household, 1000, listings, rng);
+    const decision = decideHouseholdPurchases(household, 1000, listings, {}, rng);
 
     expect(decision.purchases.length).toBeGreaterThan(0);
     expect(decision.purchases[0]!.listingId).toBe("r-food");
@@ -201,7 +544,7 @@ describe("decideHouseholdPurchases", () => {
     ];
     const rng = createRng(1);
 
-    const decision = decideHouseholdPurchases(household, 15, listings, rng);
+    const decision = decideHouseholdPurchases(household, 15, listings, {}, rng);
 
     expect(decision.purchases.some((p) => p.listingId === "r-food-expensive")).toBe(false);
     expect(decision.purchases.some((p) => p.listingId === "r-toys-cheap")).toBe(true);
@@ -232,11 +575,27 @@ describe("decideHouseholdPurchases", () => {
     // reveals the top-ranked listing directly (same technique as the "prioritizes food" test
     // above) — with 1000 cash both listings would eventually be bought regardless of order,
     // so checking `purchases[0]` rather than "some" is what actually isolates the ranking.
-    const npcDecision = decideHouseholdPurchases(npcHousehold, 1000, listings, createRng(3));
-    const studentDecision = decideHouseholdPurchases(studentHousehold, 1000, listings, createRng(3));
+    const npcDecision = decideHouseholdPurchases(npcHousehold, 1000, listings, {}, createRng(3));
+    const studentDecision = decideHouseholdPurchases(studentHousehold, 1000, listings, {}, createRng(3));
 
     expect(npcDecision.purchases[0]!.listingId).toBe("r-food");
     expect(studentDecision.purchases[0]!.listingId).toBe("r-toys");
+  });
+
+  it("ranks a listing sold outside the seller's specialty lower via specialtyMismatchPenalty, regardless of household kind (Milestone 6, D-033)", () => {
+    const listings: RetailListing[] = [
+      { id: "r-match", storeId: "store-match", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
+      { id: "r-mismatch", storeId: "store-mismatch", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
+    ];
+    const stores: Record<string, StoreState> = {
+      "store-match": makeStore({ id: "store-match", specialtyCategoryId: "toys" }),
+      "store-mismatch": makeStore({ id: "store-mismatch", specialtyCategoryId: "food" }),
+    };
+    const studentHousehold = makeHousehold({ kind: "student" });
+
+    const decision = decideHouseholdPurchases(studentHousehold, 1000, listings, stores, createRng(1));
+
+    expect(decision.purchases[0]!.listingId).toBe("r-match");
   });
 });
 
@@ -249,6 +608,17 @@ describe("scoreListingForBuyer (exported for direct unit testing, D-024)", () =>
     const withBonus = scoreListingForBuyer(10, 0.5, "food", 0.5, rng2, 0.15);
 
     expect(withBonus - withoutBonus).toBeCloseTo(0.15, 10);
+  });
+
+  it("subtracting specialtyMismatchPenalty(...) as scoreAdjustment lowers the score by exactly that amount (Milestone 6, D-033)", () => {
+    const penalty = specialtyMismatchPenalty("food", "toys");
+    const rng1 = createRng(5);
+    const rng2 = createRng(5);
+
+    const withoutPenalty = scoreListingForBuyer(10, 0.5, "toys", 0.5, rng1);
+    const withPenalty = scoreListingForBuyer(10, 0.5, "toys", 0.5, rng2, -penalty);
+
+    expect(withoutPenalty - withPenalty).toBeCloseTo(penalty, 10);
   });
 
   it("defaults priorityBonus to 0 when omitted", () => {

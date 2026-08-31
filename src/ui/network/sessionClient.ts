@@ -6,7 +6,7 @@
  * 전혀 쓰지 않는다 — `NetworkSessionMonitor.tsx`와 함께 4단계(다인원 로비)에서 재사용할
  * 기반으로 미리 만들어 둔다.
  */
-import type { GameState, ParticipantId } from "../../types/domain.js";
+import type { GameState, ParticipantId, ProductCategoryId } from "../../types/domain.js";
 import type { BusinessSetupChoices } from "../../multiplayer/GameSession.js";
 
 export interface CreateSessionResult {
@@ -47,11 +47,15 @@ export interface CompanyDecisionInput {
   quantity: number;
   quality: number;
   wholesalePrice: number;
+  /** 업종 전환 요청 (Milestone 6). 생략하면 "전환하지 않기로 선택"으로 취급된다. */
+  switchToCategoryId?: ProductCategoryId;
 }
 
 export interface StoreDecisionInput {
   purchases: PurchaseRequestLine[];
   retailPrice?: number;
+  /** 판매 카테고리 변경 요청 (Milestone 6). 생략하면 "변경하지 않기로 선택"으로 취급된다. */
+  sellingCategoryId?: ProductCategoryId;
 }
 
 export type FetchLike = typeof fetch;

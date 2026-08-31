@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeCategoryAverages, computeCompetitorCount, computeStoreCompetitorCount } from "../../src/economy/marketStats.js";
+import {
+  computeCategoryAverages,
+  computeCompetitorCount,
+  computeStoreCompetitorCount,
+  estimateCategoryMargin,
+} from "../../src/economy/marketStats.js";
 import type { CompanyState, RetailListing, StoreState, WholesaleListing } from "../../src/types/domain.js";
 
 function makeListing(overrides: Partial<WholesaleListing>): WholesaleListing {
@@ -38,6 +43,7 @@ function makeCompany(overrides: Partial<CompanyState>): CompanyState {
     quality: 0.5,
     inventoryQuantity: 0,
     lastWholesalePrice: 10,
+    lastIndustrySwitchRound: null,
     ...overrides,
   };
 }
@@ -51,9 +57,11 @@ function makeStore(overrides: Partial<StoreState>): StoreState {
     ledger: { cash: 100, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 0,
     inventoryQuality: 0.5,
     retailPrice: 20,
+    lastSellingCategoryChangeRound: null,
     ...overrides,
   };
 }
@@ -138,5 +146,25 @@ describe("computeStoreCompetitorCount", () => {
       s1: makeStore({ id: "s1", specialtyCategoryId: "food" }),
     };
     expect(computeStoreCompetitorCount(stores, "food", "s1")).toBe(0);
+  });
+});
+
+describe("estimateCategoryMargin (Milestone 6, D-033)", () => {
+  it("returns averagePrice - unitCost when the category has listings", () => {
+    const listings = [
+      makeListing({ id: "a", categoryId: "food", price: 10 }),
+      makeListing({ id: "b", categoryId: "food", price: 20 }),
+    ];
+    expect(estimateCategoryMargin(listings, "food", 4)).toBe(15 - 4);
+  });
+
+  it("returns undefined when the category has no listings (data unavailable)", () => {
+    const listings = [makeListing({ id: "a", categoryId: "apparel" })];
+    expect(estimateCategoryMargin(listings, "food", 4)).toBeUndefined();
+  });
+
+  it("can be negative when unitCost exceeds the average selling price", () => {
+    const listings = [makeListing({ id: "a", categoryId: "food", price: 5 })];
+    expect(estimateCategoryMargin(listings, "food", 20)).toBe(5 - 20);
   });
 });

@@ -40,6 +40,22 @@ export function computeCategoryAverages(
   };
 }
 
+/**
+ * 카테고리별 예상 마진 = 해당 카테고리 매물의 평균 판매가 - unitCost. 새 공식이 아니라
+ * computeCategoryAverages와 (기업이면 companyUnitCost, 가게면 매입 시세 등) 이미 존재하는
+ * "단가" 값을 조합한 것뿐이다 (Milestone 6, NPC 업종 전환/전문 이탈 판매 결정이 재사용한다).
+ * 해당 카테고리 매물이 하나도 없으면(데이터 없음) undefined를 반환한다.
+ */
+export function estimateCategoryMargin(
+  listings: readonly CategorizedPriceQualityListing[],
+  categoryId: ProductCategoryId,
+  unitCost: number,
+): number | undefined {
+  const averages = computeCategoryAverages(listings, categoryId);
+  if (averages === undefined) return undefined;
+  return averages.averagePrice - unitCost;
+}
+
 /** 같은 업종(categoryId)을 가진 다른 기업의 수 (자기 자신은 제외). */
 export function computeCompetitorCount(
   companies: Readonly<Record<ParticipantId, CompanyState>>,

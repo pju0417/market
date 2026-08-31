@@ -21,11 +21,14 @@ import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
 import {
   resolveCompanyDecision,
+  resolveCompanyIndustrySwitch,
   resolveHouseholdPurchases,
+  resolveStoreCategorySwitch,
   resolveStorePurchases,
   type CompanyDecisionInput,
   type PurchaseRequestLine,
 } from "../economy/humanDecisions.js";
+import { decideCompanyIndustrySwitch, decideStoreSpecialtyDeviation } from "../npc/decisions.js";
 import { planNpcBackfill } from "../npc/backfill.js";
 import type {
   CompanyState,
@@ -81,6 +84,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       quality: 0,
       inventoryQuantity: 0,
       lastWholesalePrice: 0,
+      lastIndustrySwitchRound: null,
     };
 
     stores[storeId] = {
@@ -91,9 +95,11 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       ledger: makeLedger(COSTS.initialCashStore),
       strategyId: rngPick(rng, ALL_STRATEGIES),
       specialtyCategoryId: storeCategory,
+      currentSellingCategoryId: null,
       inventoryQuantity: 0,
       inventoryQuality: 0,
       retailPrice: 0,
+      lastSellingCategoryChangeRound: null,
     };
 
     households[householdId] = {
@@ -122,6 +128,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       quality: 0,
       inventoryQuantity: 0,
       lastWholesalePrice: 0,
+      lastIndustrySwitchRound: null,
     };
   });
 
@@ -135,9 +142,11 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       ledger: makeLedger(COSTS.initialCashStore),
       strategyId: slot.strategyId,
       specialtyCategoryId: slot.categoryId,
+      currentSellingCategoryId: null,
       inventoryQuantity: 0,
       inventoryQuality: 0,
       retailPrice: 0,
+      lastSellingCategoryChangeRound: null,
     };
   });
 
@@ -230,6 +239,13 @@ export interface StoreDecisionInput {
   purchases: readonly PurchaseRequestLine[];
   /** 사람이 직접 정한 소매 판매가 (docs/GAME_RULES.md 1절). 생략하면 기존 자동 계산을 쓴다. */
   retailPrice?: number;
+  /**
+   * 학생이 이번 라운드 판매 카테고리를 바꾸고 싶을 때만 넣는다 (Milestone 6,
+   * docs/DECISIONS.md D-033). 생략하면 "변경하지 않기로 선택"으로 취급한다 —
+   * CompanyDecisionInput.switchToCategoryId와 동일한 원칙(humanInput 자체가 undefined인
+   * 경우에만 봇 전환 로직이 대신 실행된다).
+   */
+  sellingCategoryId?: ProductCategoryId;
 }
 
 export interface HumanDecisionSource {
@@ -254,7 +270,18 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       const district = DISTRICTS[company.districtId];
       applyFixedCosts(company.ledger, COSTS.baseLaborCostCompany, COSTS.baseRentCompany * district.rentMultiplier);
 
+      // 업종 전환은 생산 결정보다 먼저 처리한다 — 전환이 확정되면 그 즉시 productCategoryId가
+      // 바뀌고 재고/현금이 조정되므로, 이어지는 resolveCompanyDecision은 새 카테고리의 단가로
+      // 생산량을 계산한다. 사람 입력이 아예 없는 완전 봇 참가자만 NPC 전환 로직을 탄다 — 사람이
+      // 생산 입력은 냈지만 switchToCategoryId를 비운 경우는 resolveCompanyIndustrySwitch가
+      // "전환하지 않기로 선택"으로 조용히 무시한다(봇이 학생의 선택을 뒤집지 않는다).
       const humanInput = decisionSource?.getCompanyInput(company.id);
+      if (humanInput === undefined) {
+        decideCompanyIndustrySwitch(company, state, rng);
+      } else {
+        resolveCompanyIndustrySwitch(company, state.currentRound, humanInput.switchToCategoryId);
+      }
+
       const decision = resolveCompanyDecision(company, company.ledger.cash, humanInput, rng);
       if (decision === null || decision.quantity <= 0) continue;
 
@@ -292,8 +319,18 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       const district = DISTRICTS[store.districtId];
       applyFixedCosts(store.ledger, COSTS.baseLaborCostStore, COSTS.baseRentStore * district.rentMultiplier);
 
-      const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
+      // 판매 카테고리 변경(전문 업종 이탈)도 매입보다 먼저 처리한다 — 변경이 확정되면 그 즉시
+      // currentSellingCategoryId가 바뀌고 재고가 리셋되므로, 이어지는 매입은 새 카테고리
+      // 기준으로 이뤄진다. 사람 입력이 아예 없는 완전 봇 참가자만 NPC 전환 로직을 탄다(위
+      // 기업 전환과 같은 원칙).
       const requested = decisionSource?.getStorePurchaseRequest(store.id);
+      if (requested === undefined) {
+        decideStoreSpecialtyDeviation(store, state, rng);
+      } else {
+        resolveStoreCategorySwitch(store, state.currentRound, requested.sellingCategoryId);
+      }
+
+      const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
       const decision = resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested?.purchases, rng);
 
       let totalCost = 0;
@@ -346,11 +383,12 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
   function runRetailMarketUpdate(state: GameState): void {
     state.retailListings = [];
     for (const store of Object.values(state.stores)) {
-      if (store.inventoryQuantity > 0 && store.specialtyCategoryId !== null && store.retailPrice > 0) {
+      const sellingCategoryId = store.currentSellingCategoryId ?? store.specialtyCategoryId;
+      if (store.inventoryQuantity > 0 && sellingCategoryId !== null && store.retailPrice > 0) {
         state.retailListings.push({
           id: `rl-r${state.currentRound}-${store.id}`,
           storeId: store.id,
-          categoryId: store.specialtyCategoryId,
+          categoryId: sellingCategoryId,
           quantityAvailable: store.inventoryQuantity,
           quality: store.inventoryQuality,
           price: store.retailPrice,

@@ -14,6 +14,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     quality: 0.5,
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
+    lastIndustrySwitchRound: null,
     ...overrides,
   };
 }
@@ -27,9 +28,11 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     ledger: { cash: 100, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 0,
     inventoryQuality: 0,
     retailPrice: 0,
+    lastSellingCategoryChangeRound: null,
     ...overrides,
   };
 }

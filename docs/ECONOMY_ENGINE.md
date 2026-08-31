@@ -37,11 +37,15 @@ NPC 기업/가게/소비자의 의사결정 로직 (`decisions.ts`) + 인원수�
 Milestone 1의 Headless Simulator에서 사람 입력이 없는 학생 소유 참여자도 자동 진행시키는 데
 재사용한다 — Milestone 2에서 실제 입력이 생기면 학생 소유분만 교체하면 된다.
 
-**v1 범위 밖(의도적 단순화)**: 봇은 게임 중 업종을 바꾸지 않고 가게는 항상 자기 전문 업종
-안에서만 매입/판매하므로, `industrySwitchCost`·`specialtyMismatchPenalty`(둘 다
-`src/economy/config.ts`에 구현·테스트는 있음)는 자동 시뮬레이션에서 아직 호출되지 않는다.
-7라운드 커리큘럼의 4~7라운드용 이벤트(사업 확장/경쟁 전략/시장 변화, [ROUND_FLOW.md](ROUND_FLOW.md))도
-아직 없다 — 모든 라운드가 동일한 규칙으로 진행된다.
+**Milestone 6부터(D-033)**: `MIN_ROUND_FOR_INDUSTRY_ACTIONS`(4)라운드부터 기업의 업종 전환과
+가게의 전문 업종 이탈 판매가 실제로 활성화된다. `industrySwitchCost`는 사람(`src/economy/humanDecisions.ts`의
+`resolveCompanyIndustrySwitch`)과 NPC(`src/npc/decisions.ts`의 `decideCompanyIndustrySwitch`)
+양쪽 경로에서 실제로 호출되며, `specialtyMismatchPenalty`는 가계 구매 알고리즘
+(`scoreListingForBuyer`)이 전문 업종을 벗어난 판매 매물의 매력도를 낮추는 데 실제로 쓰인다.
+재고 이월 정책은 B안(강제 폐기) — 전환/이탈이 확정되면 재고 유무와 무관하게 즉시 재고·품질을
+0으로 리셋한다(보상 없음). 7라운드 커리큘럼의 다른 4~7라운드용 이벤트(경쟁 전략/시장 변화,
+[ROUND_FLOW.md](ROUND_FLOW.md))는 여전히 v1 범위 밖이다 — 이번에 활성화된 것은 업종 전환/전문
+이탈 판매뿐이다.
 
 ### `src/advisor/`
 학생에게 상황 설명과 전략 선택지를 제공하는 규칙 기반 분석기가 위치할 자리

@@ -1184,9 +1184,21 @@ JSON `{status, body}` 봉투)을 따르는 클라이언트를 준비해둔다. �
 
 ## Milestone 6 — UX 개선, 밸런싱, 교육 기능 확장
 
-- [ ] 4~7라운드 커리큘럼 차별화(사업 확장/경쟁 전략/시장 변화) — Milestone 2까지는 전 라운드가
-      동일 규칙으로 진행되며, 이는 Milestone 2의 미완성이 아니라 애초에 이 단계 범위 밖이다
-      (CLAUDE.md 6절, docs/ROUND_FLOW.md 참고)
+- [x] 4라운드부터 업종 전환/전문 이탈 판매 실제 활성화 (D-033). `MIN_ROUND_FOR_INDUSTRY_ACTIONS`
+      (4)부터 기업은 업종 전환(`switchToCategoryId`), 가게는 판매 카테고리 변경
+      (`sellingCategoryId`)을 실제로 제출할 수 있다. 재고 이월은 B안(강제 폐기) — 전환/이탈이
+      확정되면 재고 유무와 무관하게 즉시 재고·품질을 보상 없이 0으로 리셋한다. NPC는
+      `NPC_INDUSTRY_SWITCH_RULES`/`NPC_STORE_SPECIALTY_DEVIATION_RULES`(둘 다 minRound=4,
+      consecutiveNegativeProfitRounds=2, switchProbability=0.5, cooldownRounds=2)에 따라 최근
+      2라운드 연속 적자일 때만 확률적으로 전환을 시도하고, 대상 카테고리는
+      `estimateCategoryMargin`(신규, `src/economy/marketStats.ts`)으로 추정한 예상 마진이 가장
+      높은 곳을 고른다. 가게의 전문 업종 이탈 판매에는 소비 측(가계 구매 알고리즘)에
+      `specialtyMismatchPenalty`가 실제로 적용된다(이전에는 정의만 있고 호출되지 않았음).
+      사람이 생산/매입 입력은 냈지만 전환 필드를 비운 경우는 "전환하지 않기로 선택"으로
+      취급되며 봇 전환 로직이 대신 실행되지 않는다(회귀 테스트로 고정).
+- [ ] 4~7라운드 커리큘럼의 나머지 차별화(그 밖의 경쟁 전략/시장 변화 이벤트) — Milestone 2까지는
+      전 라운드가 동일 규칙으로 진행되며, 이는 Milestone 2의 미완성이 아니라 애초에 이 단계
+      범위 밖이다 (CLAUDE.md 6절, docs/ROUND_FLOW.md 참고)
 
 ## 참고: 이번 단계에서 의도적으로 구현하지 않은 것
 

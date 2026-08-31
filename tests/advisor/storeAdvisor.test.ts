@@ -18,9 +18,11 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     ledger: { cash: 500, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 0,
     inventoryQuality: 0.5,
     retailPrice: 20,
+    lastSellingCategoryChangeRound: null,
     ...overrides,
   };
 }
@@ -553,6 +555,14 @@ describe("analyzeStoreTurn", () => {
     expectWellFormedAdvice(advice);
     expect(advice.causeHypotheses.some((h) => h.id === "high-store-competition")).toBe(false);
     expect(advice.options.some((o) => o.id === "maintain-strategy")).toBe(true);
+  });
+
+  it("summarizes that the store is selling outside its specialty category when currentSellingCategoryId differs", () => {
+    const store = makeStore({ specialtyCategoryId: "food", currentSellingCategoryId: "electronics" });
+    const state = makeState({ stores: { s1: store } });
+
+    const advice = analyzeStoreTurn(state, "s1");
+    expect(advice.situationSummary.some((line) => line.includes("전문 업종") && line.includes("벗어나"))).toBe(true);
   });
 
   it("handles zero listings on the wholesale market for the category without crashing", () => {

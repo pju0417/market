@@ -310,18 +310,25 @@ function isPurchaseRequestLineArray(value: unknown): value is PurchaseRequestLin
 }
 
 function isCompanyDecisionInput(value: unknown): value is CompanyDecisionInput {
-  return (
-    isRecord(value) &&
-    typeof value.quantity === "number" &&
-    typeof value.quality === "number" &&
-    typeof value.wholesalePrice === "number"
-  );
+  if (
+    !(
+      isRecord(value) &&
+      typeof value.quantity === "number" &&
+      typeof value.quality === "number" &&
+      typeof value.wholesalePrice === "number"
+    )
+  ) {
+    return false;
+  }
+  if (value.switchToCategoryId !== undefined && !isProductCategoryId(value.switchToCategoryId)) return false;
+  return true;
 }
 
 function isStoreDecisionInput(value: unknown): value is StoreDecisionInput {
   if (!isRecord(value)) return false;
   if (!isPurchaseRequestLineArray(value.purchases)) return false;
   if (value.retailPrice !== undefined && typeof value.retailPrice !== "number") return false;
+  if (value.sellingCategoryId !== undefined && !isProductCategoryId(value.sellingCategoryId)) return false;
   return true;
 }
 

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
-import { companyUnitCost } from "../../economy/config.js";
+import { companyUnitCost, industrySwitchCost, MIN_ROUND_FOR_INDUSTRY_ACTIONS, PRODUCT_CATEGORIES } from "../../economy/config.js";
 import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
-import type { CompanyState, GameState } from "../../types/domain.js";
+import type { CompanyState, GameState, ProductCategoryId } from "../../types/domain.js";
 import { CATEGORY_LABELS, DISTRICT_LABELS, formatWon } from "../labels.js";
 import {
   computeAvailableCash,
@@ -27,17 +27,35 @@ interface Props {
 export function CompanyTurnScreen({ session, state, version, company, onSubmitted, disabled = false }: Props) {
   const fixedCost = computeCompanyFixedCost(company.districtId);
   const availableCash = computeAvailableCash(company.ledger.cash, fixedCost);
-  const unitCost = company.productCategoryId ? companyUnitCost(company.productCategoryId, company.districtId) : 0;
-  const maxAffordable = computeMaxAffordable(availableCash, unitCost);
+  const initialUnitCost = company.productCategoryId ? companyUnitCost(company.productCategoryId, company.districtId) : 0;
+  const initialMaxAffordable = computeMaxAffordable(availableCash, initialUnitCost);
 
-  const [quantity, setQuantity] = useState(Math.min(20, maxAffordable));
+  const [quantity, setQuantity] = useState(Math.min(20, initialMaxAffordable));
   const [quality, setQuality] = useState(0.5);
-  const [wholesalePrice, setWholesalePrice] = useState(Number((unitCost * 1.4).toFixed(1)));
+  const [wholesalePrice, setWholesalePrice] = useState(Number((initialUnitCost * 1.4).toFixed(1)));
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>(undefined);
+  const [switchToCategoryId, setSwitchToCategoryId] = useState<ProductCategoryId | "">("");
+
+  const canSwitchIndustry = state.currentRound >= MIN_ROUND_FOR_INDUSTRY_ACTIONS;
+  const willSwitchIndustry = switchToCategoryId !== "" && switchToCategoryId !== company.productCategoryId;
+  const switchCost =
+    willSwitchIndustry && company.productCategoryId !== null
+      ? industrySwitchCost(company.productCategoryId, switchToCategoryId as ProductCategoryId)
+      : 0;
+  const switchUnaffordable = willSwitchIndustry && switchCost > availableCash;
+
+  // 서버(runCompanyTurn)는 업종 전환을 먼저 적용해 전환비용을 차감한 뒤, 남은 현금과 새
+  // 카테고리 단가로 생산량을 계산한다(resolveCompanyIndustrySwitch → resolveCompanyDecision
+  // 순서, src/engine/simulateGame.ts). 미리보기도 같은 순서로 계산해야 실제 제출 결과와
+  // 어긋나지 않는다.
+  const effectiveProductCategoryId = switchToCategoryId !== "" ? switchToCategoryId : company.productCategoryId;
+  const unitCost = effectiveProductCategoryId ? companyUnitCost(effectiveProductCategoryId, company.districtId) : 0;
+  const cashAfterSwitch = Math.max(0, availableCash - switchCost);
+  const maxAffordable = computeMaxAffordable(cashAfterSwitch, unitCost);
 
   const productionCost = useMemo(() => computeProductionCost(quantity, unitCost), [quantity, unitCost]);
-  const overBudget = isOverBudget(productionCost, availableCash);
+  const overBudget = isOverBudget(productionCost, cashAfterSwitch);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
   const advice = useMemo(() => analyzeCompanyTurn(state, company.id), [version, company.id]);
 
@@ -71,6 +89,37 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         <span className="label">개당 생산단가</span>
         <span className="value">{formatWon(unitCost)}</span>
       </div>
+
+      {canSwitchIndustry && (
+        <div className="field">
+          <span className="field-label">업종 전환 (4라운드부터 가능)</span>
+          <select
+            value={switchToCategoryId}
+            onChange={(e) => setSwitchToCategoryId(e.target.value as ProductCategoryId | "")}
+          >
+            <option value="">전환 안 함 (현재: {company.productCategoryId ? CATEGORY_LABELS[company.productCategoryId] : "-"})</option>
+            {PRODUCT_CATEGORIES.filter((categoryId) => categoryId !== company.productCategoryId).map((categoryId) => (
+              <option key={categoryId} value={categoryId}>
+                {CATEGORY_LABELS[categoryId]}
+              </option>
+            ))}
+          </select>
+          {willSwitchIndustry && (
+            <>
+              <p style={{ fontSize: 14 }}>
+                전환 비용 {formatWon(switchCost)}이 현금에서 먼저 차감되고, 남은 {formatWon(cashAfterSwitch)}으로
+                새 품목을 생산해요 — 아래 생산단가/최대 수량은 이미 이 순서를 반영한 값입니다.
+              </p>
+              <p style={{ color: "#dc2626", fontSize: 14 }}>
+                전환하면 남은 재고와 품질이 모두 사라져요 — 보상 없이 즉시 폐기됩니다.
+              </p>
+              {switchUnaffordable && (
+                <p style={{ color: "#dc2626", fontSize: 14 }}>전환 비용이 가진 돈보다 많아 전환할 수 없어요.</p>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <label className="field">
         <span className="field-label">생산량 (최대 {maxAffordable}개까지 살 수 있어요)</span>
@@ -109,10 +158,13 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
 
       <button
         className="primary"
-        disabled={disabled || overBudget || company.productCategoryId === null}
+        disabled={disabled || overBudget || company.productCategoryId === null || switchUnaffordable}
         onClick={() => {
           setSubmitError(undefined);
-          Promise.resolve(session.submitCompanyDecision(company.id, { quantity, quality, wholesalePrice }))
+          const input = willSwitchIndustry
+            ? { quantity, quality, wholesalePrice, switchToCategoryId: switchToCategoryId as ProductCategoryId }
+            : { quantity, quality, wholesalePrice };
+          Promise.resolve(session.submitCompanyDecision(company.id, input))
             .then(() => onSubmitted())
             .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));
         }}

@@ -73,6 +73,56 @@ describe("AppsScriptDecisionSubmitter", () => {
     expect(Object.keys(body.input)).not.toContain("retailPrice");
   });
 
+  it("submits store decisions including sellingCategoryId when provided (Milestone 6, D-033)", async () => {
+    const { fetchImpl, calls } = stubFetch();
+    const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
+    const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
+
+    await submitter.submitStoreDecision("store-1", {
+      purchases: [{ listingId: "listing-1", quantity: 2 }],
+      retailPrice: 500,
+      sellingCategoryId: "toys",
+    });
+
+    const result = decodeRequest(calls[0]!);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request.body).toEqual({
+      storeId: "store-1",
+      input: { purchases: [{ listingId: "listing-1", quantity: 2 }], retailPrice: 500, sellingCategoryId: "toys" },
+    });
+  });
+
+  it("omits sellingCategoryId entirely when not provided", async () => {
+    const { fetchImpl, calls } = stubFetch();
+    const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
+    const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
+
+    await submitter.submitStoreDecision("store-1", { purchases: [{ listingId: "listing-1", quantity: 2 }] });
+
+    const result = decodeRequest(calls[0]!);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const body = result.request.body as { storeId: string; input: Record<string, unknown> };
+    expect(Object.keys(body.input)).not.toContain("sellingCategoryId");
+  });
+
+  it("submits company decisions including switchToCategoryId when provided (Milestone 6, D-033)", async () => {
+    const { fetchImpl, calls } = stubFetch();
+    const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
+    const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
+
+    await submitter.submitCompanyDecision("company-1", { quantity: 10, quality: 0.5, wholesalePrice: 100, switchToCategoryId: "toys" });
+
+    const result = decodeRequest(calls[0]!);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request.body).toEqual({
+      companyId: "company-1",
+      input: { quantity: 10, quality: 0.5, wholesalePrice: 100, switchToCategoryId: "toys" },
+    });
+  });
+
   it("submits household purchases to the household submit path", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);

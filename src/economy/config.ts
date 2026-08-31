@@ -41,10 +41,9 @@ export function categorySimilarity(a: ProductCategoryId, b: ProductCategoryId): 
 }
 
 /**
- * 업종 전환 추가비용 (D-011). 유사도가 낮을수록(관련 없을수록) 비싸진다.
- * v1의 기본 NPC/시뮬레이션 봇은 게임 중 업종을 바꾸지 않으므로 자동 시뮬레이션에서는
- * 호출되지 않는다 — 학생이 실제로 업종 전환을 선택할 수 있게 되는 Milestone 2 이후
- * 플레이어 의사결정 경로에서 쓰기 위해 미리 정의해 둔다.
+ * 업종 전환 추가비용 (D-011). 유사도가 낮을수록(관련 없을수록) 비싸진다. `MIN_ROUND_FOR_INDUSTRY_ACTIONS`
+ * 라운드부터 사람(src/economy/humanDecisions.ts)과 NPC(src/npc/decisions.ts) 양쪽 경로가
+ * 실제로 호출한다 (Milestone 6, docs/DECISIONS.md D-033).
  */
 export function industrySwitchCost(previous: ProductCategoryId, next: ProductCategoryId): number {
   return COSTS.industrySwitchBaseCost * (1 - categorySimilarity(previous, next));
@@ -52,12 +51,62 @@ export function industrySwitchCost(previous: ProductCategoryId, next: ProductCat
 
 /**
  * 가게가 전문 업종과 다른 카테고리를 팔 때의 소비자 매력도 페널티 (docs/GAME_RULES.md 4절).
- * v1 기본 봇은 항상 전문 업종 안에서만 매입/판매하므로 자동 시뮬레이션에서는 호출되지
- * 않는다 — 위 industrySwitchCost와 같은 이유로 Milestone 2 이후를 위해 미리 정의해 둔다.
+ * `MIN_ROUND_FOR_INDUSTRY_ACTIONS` 라운드부터 가게가 전문 업종을 벗어나 판매할 수 있게 되면서
+ * (Milestone 6, docs/DECISIONS.md D-033) src/npc/decisions.ts의 scoreListingForBuyer(가계 구매
+ * 알고리즘)가 실제로 호출한다.
  */
 export function specialtyMismatchPenalty(specialty: ProductCategoryId, sold: ProductCategoryId): number {
   return COSTS.storeSpecialtyMismatchPenalty * (1 - categorySimilarity(specialty, sold));
 }
+
+/**
+ * 업종 전환/전문 이탈 판매가 실제로 활성화되는 라운드 (Milestone 6, docs/DECISIONS.md D-033).
+ * 3라운드까지는 창업 시 정한 업종/전문성을 그대로 유지해야 한다는 커리큘럼 의도(docs/ROUND_FLOW.md)
+ * 를 코드에서 강제하는 하드 게이트다.
+ */
+export const MIN_ROUND_FOR_INDUSTRY_ACTIONS = 4;
+
+export interface IndustrySwitchRules {
+  /** 이 라운드 미만에서는 절대 전환하지 않는다. */
+  minRound: number;
+  /** 최근 이만큼의 라운드 연속으로 적자였을 때만 전환을 "고려"한다. */
+  consecutiveNegativeProfitRounds: number;
+  /** 전환을 고려하는 조건을 만족해도, 이 확률로만 실제 전환을 실행한다 (rng 기반, 결정론 유지). */
+  switchProbability: number;
+  /**
+   * 전환 판정에 쓰는 `currentRound - lastSwitchRound < cooldownRounds` 기준값. 전환이 확정된
+   * 바로 다음 라운드 1개만 막힌다는 뜻이다(예: 값이 2여도 2라운드가 아니라 1라운드만 막힘) —
+   * "cooldownRounds만큼의 라운드 동안 막힌다"로 오해하지 않도록 주의.
+   */
+  cooldownRounds: number;
+}
+
+/**
+ * NPC 기업의 업종 전환 조건 (Milestone 6, docs/DECISIONS.md D-033 확정값). architect 제안값을
+ * 그대로 사용한다 — 밸런스 조정이 필요해지면 CLAUDE.md 4절 승인 절차를 따른다.
+ */
+export const NPC_INDUSTRY_SWITCH_RULES: IndustrySwitchRules = {
+  minRound: 4,
+  consecutiveNegativeProfitRounds: 2,
+  switchProbability: 0.5,
+  cooldownRounds: 2,
+};
+
+/**
+ * NPC 가게의 전문 업종 이탈 판매 조건 (Milestone 6, docs/DECISIONS.md D-033). 기업과 같은
+ * 구조지만 독립된 상수다 — 나중에 가게만 따로 튜닝할 수 있도록 값을 공유하지 않고 복제해
+ * 둔다(현재는 기업과 동일한 값에서 시작).
+ *
+ * cooldownRounds는 NPC 전용이 아니다 — 가게의 사람 전환 경로(resolveStoreCategorySwitch,
+ * src/economy/humanDecisions.ts)와 StoreTurnScreen.tsx도 이 값을 그대로 공유해서 쓴다
+ * (D-033에서 사용자가 승인한 의도적 공유).
+ */
+export const NPC_STORE_SPECIALTY_DEVIATION_RULES: IndustrySwitchRules = {
+  minRound: 4,
+  consecutiveNegativeProfitRounds: 2,
+  switchProbability: 0.5,
+  cooldownRounds: 2,
+};
 
 export interface DistrictProfile {
   id: DistrictId;

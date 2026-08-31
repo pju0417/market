@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
+import { industrySwitchCost, MIN_ROUND_FOR_INDUSTRY_ACTIONS, NPC_STORE_SPECIALTY_DEVIATION_RULES } from "../../src/economy/config.js";
 import {
   resolveCompanyDecision,
+  resolveCompanyIndustrySwitch,
   resolveHouseholdPurchases,
+  resolveStoreCategorySwitch,
   resolveStorePurchases,
 } from "../../src/economy/humanDecisions.js";
 import { decideCompanyProduction } from "../../src/npc/decisions.js";
@@ -20,6 +23,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     quality: 0,
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
+    lastIndustrySwitchRound: null,
     ...overrides,
   };
 }
@@ -33,9 +37,11 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     ledger: { cash: 1000, cumulativeProfit: 0 },
     strategyId: "stable",
     specialtyCategoryId: "food",
+    currentSellingCategoryId: null,
     inventoryQuantity: 0,
     inventoryQuality: 0,
     retailPrice: 0,
+    lastSellingCategoryChangeRound: null,
     ...overrides,
   };
 }
@@ -226,5 +232,134 @@ describe("resolveHouseholdPurchases", () => {
     const decision = resolveHouseholdPurchases(household, 100, orphanListings, {}, [{ listingId: "r-orphan", quantity: 2 }], createRng(1));
 
     expect(decision.purchases).toHaveLength(0);
+  });
+});
+
+describe("resolveCompanyIndustrySwitch (Milestone 6, D-033, B안: 재고 강제 폐기)", () => {
+  it("does nothing when switchToCategoryId is undefined", () => {
+    const company = makeCompany({ productCategoryId: "food", inventoryQuantity: 10, quality: 0.5 });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS, undefined);
+
+    expect(company.productCategoryId).toBe("food");
+    expect(company.inventoryQuantity).toBe(10);
+    expect(company.lastIndustrySwitchRound).toBeNull();
+  });
+
+  it("rejects a switch attempt before MIN_ROUND_FOR_INDUSTRY_ACTIONS", () => {
+    const company = makeCompany({ productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS - 1, "toys");
+
+    expect(company.productCategoryId).toBe("food");
+    expect(company.ledger.cash).toBe(1000);
+  });
+
+  it("treats a request for the same category as a no-op", () => {
+    const company = makeCompany({ productCategoryId: "food", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "food");
+
+    expect(company.ledger.cash).toBe(1000);
+    expect(company.lastIndustrySwitchRound).toBeNull();
+  });
+
+  it("rejects the switch when the switch cost exceeds available cash", () => {
+    const cost = industrySwitchCost("food", "electronics");
+    const company = makeCompany({ productCategoryId: "food", ledger: { cash: cost - 1, cumulativeProfit: 0 } });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "electronics");
+
+    expect(company.productCategoryId).toBe("food");
+    expect(company.ledger.cash).toBe(cost - 1);
+  });
+
+  it("switches category, charges exactly the switch cost, and force-resets inventory/quality to 0 (B안)", () => {
+    const cost = industrySwitchCost("food", "toys");
+    const company = makeCompany({
+      productCategoryId: "food",
+      inventoryQuantity: 50,
+      quality: 0.8,
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+    });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "toys");
+
+    expect(company.productCategoryId).toBe("toys");
+    expect(company.ledger.cash).toBe(1000 - cost);
+    expect(company.inventoryQuantity).toBe(0);
+    expect(company.quality).toBe(0);
+    expect(company.lastIndustrySwitchRound).toBe(MIN_ROUND_FOR_INDUSTRY_ACTIONS);
+  });
+
+  it("switches even when inventory is already 0 (B안: 재고 유무는 게이팅 조건이 아니다)", () => {
+    const company = makeCompany({
+      productCategoryId: "food",
+      inventoryQuantity: 0,
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+    });
+    resolveCompanyIndustrySwitch(company, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "apparel");
+
+    expect(company.productCategoryId).toBe("apparel");
+  });
+});
+
+describe("resolveStoreCategorySwitch (Milestone 6, D-033)", () => {
+  it("does nothing when sellingCategoryId is undefined", () => {
+    const store = makeStore({ specialtyCategoryId: "food" });
+    resolveStoreCategorySwitch(store, MIN_ROUND_FOR_INDUSTRY_ACTIONS, undefined);
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("rejects a switch attempt before MIN_ROUND_FOR_INDUSTRY_ACTIONS", () => {
+    const store = makeStore({ specialtyCategoryId: "food" });
+    resolveStoreCategorySwitch(store, MIN_ROUND_FOR_INDUSTRY_ACTIONS - 1, "toys");
+
+    expect(store.currentSellingCategoryId).toBeNull();
+  });
+
+  it("treats a request for the same (effective) category as a no-op", () => {
+    const store = makeStore({ specialtyCategoryId: "food" });
+    resolveStoreCategorySwitch(store, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "food");
+
+    expect(store.currentSellingCategoryId).toBeNull();
+    expect(store.lastSellingCategoryChangeRound).toBeNull();
+  });
+
+  it("switches selling category and force-resets inventory/quality to 0 (B안), no cost is charged", () => {
+    const store = makeStore({
+      specialtyCategoryId: "food",
+      inventoryQuantity: 30,
+      inventoryQuality: 0.6,
+      ledger: { cash: 500, cumulativeProfit: 0 },
+    });
+    resolveStoreCategorySwitch(store, MIN_ROUND_FOR_INDUSTRY_ACTIONS, "toys");
+
+    expect(store.currentSellingCategoryId).toBe("toys");
+    expect(store.inventoryQuantity).toBe(0);
+    expect(store.inventoryQuality).toBe(0);
+    expect(store.lastSellingCategoryChangeRound).toBe(MIN_ROUND_FOR_INDUSTRY_ACTIONS);
+    expect(store.ledger.cash).toBe(500);
+  });
+
+  it("rejects a second switch while the cooldown is still active", () => {
+    const store = makeStore({
+      specialtyCategoryId: "food",
+      currentSellingCategoryId: "toys",
+      lastSellingCategoryChangeRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+    });
+    const stillInCooldownRound = MIN_ROUND_FOR_INDUSTRY_ACTIONS + NPC_STORE_SPECIALTY_DEVIATION_RULES.cooldownRounds - 1;
+    resolveStoreCategorySwitch(store, stillInCooldownRound, "electronics");
+
+    expect(store.currentSellingCategoryId).toBe("toys");
+  });
+
+  it("allows a switch again once the cooldown has fully elapsed", () => {
+    const store = makeStore({
+      specialtyCategoryId: "food",
+      currentSellingCategoryId: "toys",
+      lastSellingCategoryChangeRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+    });
+    const afterCooldownRound = MIN_ROUND_FOR_INDUSTRY_ACTIONS + NPC_STORE_SPECIALTY_DEVIATION_RULES.cooldownRounds;
+    resolveStoreCategorySwitch(store, afterCooldownRound, "electronics");
+
+    expect(store.currentSellingCategoryId).toBe("electronics");
+    expect(store.lastSellingCategoryChangeRound).toBe(afterCooldownRound);
   });
 });

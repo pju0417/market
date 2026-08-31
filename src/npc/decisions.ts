@@ -14,12 +14,21 @@ import {
   companyUnitCost,
   essentialNpcPriorityBonus,
   HOUSEHOLD_STRATEGY_PRESETS,
+  industrySwitchCost,
+  NPC_INDUSTRY_SWITCH_RULES,
+  NPC_STORE_SPECIALTY_DEVIATION_RULES,
+  PRODUCT_CATEGORIES,
+  specialtyMismatchPenalty,
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
+import { estimateCategoryMargin, computeCategoryAverages } from "../economy/marketStats.js";
 import { rngRange, type Rng } from "../economy/rng.js";
+import { chargeDiscretionary } from "../economy/settlement.js";
 import type {
   CompanyState,
+  GameState,
   HouseholdState,
+  ParticipantId,
   ProductCategoryId,
   RetailListing,
   StoreState,
@@ -72,6 +81,63 @@ export function decideCompanyProduction(
   return { categoryId, quantity, quality, wholesalePrice, unitCost, productionCost };
 }
 
+/**
+ * NPC 기업의 업종 전환 결정 (Milestone 6, docs/DECISIONS.md D-033). 순수 함수가 아니라
+ * company를 직접 mutate한다(전환 확정 시 재고/품질 리셋 + 비용 차감 + lastIndustrySwitchRound
+ * 갱신까지 한 번에 처리) — chargeDiscretionary/credit 등 settlement 헬퍼가 원장을 직접 바꾸는
+ * 것과 같은 패턴이다. runCompanyTurn(src/engine/simulateGame.ts)은 이 기업에 사람 입력이
+ * 전혀 없을 때만(=완전 봇) 이 함수를 호출해야 한다 — 사람이 생산 입력은 냈지만 전환 필드를
+ * 비운 경우에는 호출하면 안 된다(학생의 "전환 안 함" 선택을 봇이 뒤집는 버그가 된다).
+ *
+ * 전환을 "고려"하는 조건(최소 라운드, 쿨다운, 최근 N라운드 연속 적자)을 모두 만족해도,
+ * switchProbability로만 실제 전환을 실행한다(rng 기반, 결정론 유지). 전환 대상 카테고리는
+ * estimateCategoryMargin으로 도매시장 실시간 매물 기준 예상 마진이 가장 높은 카테고리를
+ * 고른다 — 매물 자체가 없어 마진을 추정할 수 없는 카테고리는 후보에서 제외하고, 후보가
+ * 하나도 없으면 전환하지 않는다.
+ */
+export function decideCompanyIndustrySwitch(company: CompanyState, state: GameState, rng: Rng): void {
+  const rules = NPC_INDUSTRY_SWITCH_RULES;
+  if (state.currentRound < rules.minRound) return;
+  const currentCategory = company.productCategoryId;
+  if (currentCategory === null) return;
+  if (
+    company.lastIndustrySwitchRound !== null &&
+    state.currentRound - company.lastIndustrySwitchRound < rules.cooldownRounds
+  ) {
+    return;
+  }
+
+  const recentRounds = state.roundMetrics.slice(-rules.consecutiveNegativeProfitRounds);
+  if (recentRounds.length < rules.consecutiveNegativeProfitRounds) return;
+  const allNegative = recentRounds.every((metrics) => (metrics.companyProfit[company.id] ?? 0) < 0);
+  if (!allNegative) return;
+
+  if (rng() >= rules.switchProbability) return;
+
+  let bestCategory: ProductCategoryId | undefined;
+  let bestMargin = -Infinity;
+  for (const candidate of PRODUCT_CATEGORIES) {
+    if (candidate === currentCategory) continue;
+    const unitCost = companyUnitCost(candidate, company.districtId);
+    const margin = estimateCategoryMargin(state.wholesaleListings, candidate, unitCost);
+    if (margin === undefined) continue;
+    if (margin > bestMargin) {
+      bestMargin = margin;
+      bestCategory = candidate;
+    }
+  }
+  if (bestCategory === undefined) return;
+
+  const cost = industrySwitchCost(currentCategory, bestCategory);
+  if (cost > company.ledger.cash) return;
+
+  chargeDiscretionary(company.ledger, cost);
+  company.productCategoryId = bestCategory;
+  company.inventoryQuantity = 0;
+  company.quality = 0;
+  company.lastIndustrySwitchRound = state.currentRound;
+}
+
 export interface PurchaseLine {
   listingId: string;
   quantity: number;
@@ -96,9 +162,10 @@ export function decideStorePurchases(
   // 기업과 같은 "적정 재고까지만 채운다" 정책 (docs/DECISIONS.md D-019).
   const targetStockLevel = BASE_STORE_PURCHASE_QUANTITY * preset.purchaseQuantityMultiplier;
   const targetQuantity = Math.floor(Math.max(0, targetStockLevel - store.inventoryQuantity));
+  const sellingCategoryId = store.currentSellingCategoryId ?? store.specialtyCategoryId;
 
   const candidates = eligibleListings
-    .filter((listing) => listing.categoryId === store.specialtyCategoryId && listing.quantityAvailable > 0)
+    .filter((listing) => listing.categoryId === sellingCategoryId && listing.quantityAvailable > 0)
     .map((listing) => ({
       listing,
       score: scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, preset.qualityWeight, rng),
@@ -122,35 +189,98 @@ export function decideStorePurchases(
   return { purchases };
 }
 
+/**
+ * NPC 가게의 전문 업종 이탈 판매 결정 (Milestone 6, docs/DECISIONS.md D-033).
+ * decideCompanyIndustrySwitch와 같은 구조 — 순수 함수가 아니라 store를 직접 mutate한다.
+ * 가게 쪽은 즉시 차감되는 전환 비용이 없다(specialtyMismatchPenalty는 소비 측에서만
+ * 적용된다) — 대신 기업과 동일한 쿨다운을 lastSellingCategoryChangeRound 기준으로 적용한다.
+ * runStoreTurn(src/engine/simulateGame.ts)은 이 가게에 사람 입력이 전혀 없을 때만(=완전 봇)
+ * 이 함수를 호출해야 한다.
+ *
+ * 전환 대상 카테고리의 예상 마진은 "그 카테고리를 팔았을 때의 소매가(직전 라운드 마감
+ * 시세) - 그 카테고리를 매입하는 데 드는 도매가(이번 라운드 실시간 시세)"로 추정한다 —
+ * 둘 중 하나라도 시장 데이터가 없는 카테고리는 후보에서 제외한다.
+ */
+export function decideStoreSpecialtyDeviation(store: StoreState, state: GameState, rng: Rng): void {
+  const rules = NPC_STORE_SPECIALTY_DEVIATION_RULES;
+  if (state.currentRound < rules.minRound) return;
+  const currentCategory = store.currentSellingCategoryId ?? store.specialtyCategoryId;
+  if (currentCategory === null) return;
+  if (
+    store.lastSellingCategoryChangeRound !== null &&
+    state.currentRound - store.lastSellingCategoryChangeRound < rules.cooldownRounds
+  ) {
+    return;
+  }
+
+  const recentRounds = state.roundMetrics.slice(-rules.consecutiveNegativeProfitRounds);
+  if (recentRounds.length < rules.consecutiveNegativeProfitRounds) return;
+  const allNegative = recentRounds.every((metrics) => (metrics.storeProfit[store.id] ?? 0) < 0);
+  if (!allNegative) return;
+
+  if (rng() >= rules.switchProbability) return;
+
+  let bestCategory: ProductCategoryId | undefined;
+  let bestMargin = -Infinity;
+  for (const candidate of PRODUCT_CATEGORIES) {
+    if (candidate === currentCategory) continue;
+    const wholesaleAverages = computeCategoryAverages(state.wholesaleListings, candidate);
+    if (wholesaleAverages === undefined) continue;
+    const margin = estimateCategoryMargin(state.retailListings, candidate, wholesaleAverages.averagePrice);
+    if (margin === undefined) continue;
+    if (margin > bestMargin) {
+      bestMargin = margin;
+      bestCategory = candidate;
+    }
+  }
+  if (bestCategory === undefined) return;
+
+  store.currentSellingCategoryId = bestCategory;
+  store.inventoryQuantity = 0;
+  store.inventoryQuality = 0;
+  store.lastSellingCategoryChangeRound = state.currentRound;
+}
+
 export interface HouseholdPurchaseDecision {
   purchases: PurchaseLine[];
 }
 
 /**
  * eligibleListings는 이미 자기 거래 금지(D-006) 필터를 적용한 상태여야 한다
- * (src/economy/market.ts의 eligibleRetailListingsForHousehold 참고).
+ * (src/economy/market.ts의 eligibleRetailListingsForHousehold 참고). stores는 각 매물의
+ * 판매 가게를 조회해 전문 업종 이탈 여부(specialtyMismatchPenalty)를 판단하는 데 쓴다
+ * (Milestone 6).
  */
 export function decideHouseholdPurchases(
   household: HouseholdState,
   availableCash: number,
   eligibleListings: readonly RetailListing[],
+  stores: Readonly<Record<ParticipantId, StoreState>>,
   rng: Rng,
 ): HouseholdPurchaseDecision {
   const preset = HOUSEHOLD_STRATEGY_PRESETS[household.strategyId];
 
   const candidates = eligibleListings
     .filter((listing) => listing.quantityAvailable > 0)
-    .map((listing) => ({
-      listing,
-      score: scoreListingForBuyer(
-        listing.price,
-        listing.quality,
-        listing.categoryId,
-        preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6),
-        rng,
-        household.kind === "npc" ? essentialNpcPriorityBonus(listing.categoryId) : 0,
-      ),
-    }))
+    .map((listing) => {
+      const priorityBonus = household.kind === "npc" ? essentialNpcPriorityBonus(listing.categoryId) : 0;
+      const sellingStore = stores[listing.storeId];
+      const mismatchPenalty =
+        sellingStore !== undefined && sellingStore.specialtyCategoryId !== null
+          ? specialtyMismatchPenalty(sellingStore.specialtyCategoryId, listing.categoryId)
+          : 0;
+      return {
+        listing,
+        score: scoreListingForBuyer(
+          listing.price,
+          listing.quality,
+          listing.categoryId,
+          preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6),
+          rng,
+          priorityBonus - mismatchPenalty,
+        ),
+      };
+    })
     .sort((a, b) => b.score - a.score);
 
   const purchases: PurchaseLine[] = [];
@@ -172,10 +302,14 @@ export function decideHouseholdPurchases(
 
 /**
  * 가격 대비 품질 점수. qualityWeight=1이면 품질만, 0이면 가격만 본다. 아주 작은 난수로 동점을
- * 깬다. priorityBonus는 "필수 소비" 카테고리(docs/DECISIONS.md D-024)에 가계 구매 알고리즘이
- * 주는 가산점이며, decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상
- * 기본값 0으로 호출된다. 이 가산점은 decideHouseholdPurchases에서 household.kind === "npc"일
- * 때만 적용되며, 학생 소유 자동진행 가계에는 적용되지 않는다(D-024 후속 수정).
+ * 깬다. scoreAdjustment는 이 기본 점수에 그대로 더해지는 일반화된 보정치다(이전 이름은
+ * priorityBonus) — 두 가지 서로 다른 보정을 합산해 넘길 수 있다:
+ * - "필수 소비" 카테고리(docs/DECISIONS.md D-024) 가산점: decideHouseholdPurchases에서
+ *   household.kind === "npc"일 때만 적용되며, 학생 소유 자동진행 가계에는 적용되지 않는다
+ *   (D-024 후속 수정).
+ * - 가게의 전문 업종 이탈 판매 매력도 페널티(specialtyMismatchPenalty, Milestone 6,
+ *   docs/DECISIONS.md D-033): household.kind와 무관하게 적용된다.
+ * decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상 기본값 0으로 호출된다.
  */
 export function scoreListingForBuyer(
   price: number,
@@ -183,12 +317,12 @@ export function scoreListingForBuyer(
   categoryId: ProductCategoryId,
   qualityWeight: number,
   rng: Rng,
-  priorityBonus = 0,
+  scoreAdjustment = 0,
 ): number {
   const referencePrice = CATEGORY_UNIT_COST[categoryId] * REFERENCE_PRICE_MULTIPLIER;
   const normalizedPrice = price / referencePrice;
   const tieBreak = rngRange(rng, -0.01, 0.01);
-  return qualityWeight * quality - (1 - qualityWeight) * normalizedPrice + tieBreak + priorityBonus;
+  return qualityWeight * quality - (1 - qualityWeight) * normalizedPrice + tieBreak + scoreAdjustment;
 }
 
 function clamp01(value: number): number {

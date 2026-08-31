@@ -221,6 +221,83 @@ describe("handleApiRequest (Milestone 4 2단계, no real server)", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects an invalid switchToCategoryId with 400 (Milestone 6, D-033)", async () => {
+    const { sessionId } = await createTestSession(2);
+    const joinA = await handleApiRequest(
+      req({ method: "POST", path: `/api/sessions/${sessionId}/join`, body: { playerId: "student-1" } }),
+    );
+    const { token } = joinA.body as { token: string };
+
+    const response = await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/submit/company`,
+      query: {},
+      headers: { authorization: `Bearer ${token}` },
+      body: {
+        companyId: "student-1-company",
+        input: { quantity: 1, quality: 0.5, wholesalePrice: 1, switchToCategoryId: "not-a-real-category" },
+      },
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("accepts a valid switchToCategoryId on submit/company (Milestone 6, D-033)", async () => {
+    const { sessionId } = await createTestSession(2);
+    const joinA = await handleApiRequest(
+      req({ method: "POST", path: `/api/sessions/${sessionId}/join`, body: { playerId: "student-1" } }),
+    );
+    const { token } = joinA.body as { token: string };
+
+    const response = await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/submit/company`,
+      query: {},
+      headers: { authorization: `Bearer ${token}` },
+      body: {
+        companyId: "student-1-company",
+        input: { quantity: 1, quality: 0.5, wholesalePrice: 1, switchToCategoryId: "toys" },
+      },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects an invalid sellingCategoryId on submit/store with 400 (Milestone 6, D-033)", async () => {
+    const { sessionId } = await createTestSession(2);
+    const tokenFor = async (playerId: string) => {
+      const join = await handleApiRequest(req({ method: "POST", path: `/api/sessions/${sessionId}/join`, body: { playerId } }));
+      return (join.body as { token: string }).token;
+    };
+    const tokenA = await tokenFor("student-1");
+    const tokenB = await tokenFor("student-2");
+    const companyInput = { quantity: 5, quality: 0.5, wholesalePrice: 8 };
+
+    for (const [token, playerId] of [
+      [tokenA, "student-1"],
+      [tokenB, "student-2"],
+    ] as const) {
+      const submit = await handleApiRequest({
+        method: "POST",
+        path: `/api/sessions/${sessionId}/submit/company`,
+        query: {},
+        headers: { authorization: `Bearer ${token}` },
+        body: { companyId: `${playerId}-company`, input: companyInput },
+      });
+      expect(submit.status).toBe(200);
+    }
+
+    const stateAfter = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+    expect((stateAfter.body as { state: { currentPhase: string } }).state.currentPhase).toBe("store-turn");
+
+    const response = await handleApiRequest({
+      method: "POST",
+      path: `/api/sessions/${sessionId}/submit/store`,
+      query: {},
+      headers: { authorization: `Bearer ${tokenA}` },
+      body: { storeId: "student-1-store", input: { purchases: [], sellingCategoryId: "not-a-real-category" } },
+    });
+    expect(response.status).toBe(400);
+  });
+
   it("polling with ?since=<current version> reports unchanged, and a fresh submission bumps the version", async () => {
     const { sessionId } = await createTestSession(2);
 

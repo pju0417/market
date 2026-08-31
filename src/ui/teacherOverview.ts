@@ -41,7 +41,7 @@ export function computeStoreRanking(state: GameState): ParticipantRankingRow[] {
     id: store.id,
     kind: store.kind,
     districtId: store.districtId,
-    categoryId: store.specialtyCategoryId,
+    categoryId: store.currentSellingCategoryId ?? store.specialtyCategoryId,
     cash: store.ledger.cash,
     cumulativeProfit: store.ledger.cumulativeProfit,
     latestRoundProfit: latest?.storeProfit[store.id],
