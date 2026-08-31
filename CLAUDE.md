@@ -97,5 +97,6 @@
 - [docs/ADVISOR_RULES.md](docs/ADVISOR_RULES.md) — 규칙 기반 전략 비서 설계
 - [docs/MULTIPLAYER_DESIGN.md](docs/MULTIPLAYER_DESIGN.md) — 동시 턴 멀티플레이 구조
 - [docs/GOOGLE_SHEETS_ARCHITECTURE.md](docs/GOOGLE_SHEETS_ARCHITECTURE.md) — 저장소 계층 분리, 장기 배포 구조
+- [docs/APPS_SCRIPT_DEPLOYMENT.md](docs/APPS_SCRIPT_DEPLOYMENT.md) — Apps Script Web App 실제 배포 절차(초안, 미검증)
 - [docs/DECISIONS.md](docs/DECISIONS.md) — 확정 결정사항(D-001~) 및 변경 이력, 자동수정/승인 절차
 - [docs/TODO.md](docs/TODO.md) — 마일스톤 로드맵

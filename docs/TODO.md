@@ -1140,10 +1140,47 @@ Vite**로 확정 (D-020). 1차 범위는 **학생 1명(사람) 플레이**로 �
       회귀 테스트 1개 추가(라운드 확정 시 행 생성 확인, 같은 라운드 재저장 시 중복 없음 확인).
       전체 377개 테스트, `typecheck`(세 tsconfig)·`lint`·`build`·`build:apps-script` 모두
       재검증 통과.
+### 3부 — Apps Script용 학생 클라이언트 (화면 배선/실제 배포는 여전히 범위 밖, D-032)
+
+목표: 로컬 서버용 `sessionClient.ts`와 나란히 쓸 수 있는, Apps Script Web App 전송 규약
+(GET=쿼리파라미터, POST=JSON 바디의 `{path, token?, body?}`, 상태코드는 항상 200인 응답의
+JSON `{status, body}` 봉투)을 따르는 클라이언트를 준비해둔다. 기존 로컬 서버용 4개 파일
+(`sessionClient.ts`/`DecisionSubmitter.ts`/`NetworkDecisionSubmitter.ts`/
+`useNetworkGameSession.ts`)과 경제 엔진(`src/engine`/`src/economy`/`src/npc`/`src/advisor`)/
+`src/server/*`는 한 글자도 건드리지 않았다(`git diff --stat`으로 확인).
+
+- [x] `src/ui/network/appsScriptSessionClient.ts` (신규): `AppsScriptSessionClient` 클래스.
+      `sessionClient.ts`의 `ApiError`/타입들을 재사용(재구현하지 않음). GET은 커스텀 헤더
+      없이 쿼리파라미터로 `path`(및 `since` 등)를 실어 보내고, POST는 항상 같은 `webAppUrl`에
+      `content-type: text/plain;charset=utf-8`(브라우저 preflight를 유발하는
+      `application/json`을 피함 — 서버는 어차피 raw text를 JSON.parse하므로 영향 없음)로
+      `{path, token?, body?}` JSON을 보낸다. `Authorization` 헤더는 전혀 쓰지 않는다(토큰은
+      쿼리/바디 필드로만 전달). `unwrap()`이 `{status, body}` 봉투를 벗기고, 범위 밖 상태나
+      비봉투 응답에서 `ApiError`를 던진다. `SessionClient`의 공개 메서드 전체를 1:1 대응시켰고,
+      라우트별 GET/POST 배정은 `src/server/httpApi.ts`를 직접 읽어 재확인했다(`/slots`·
+      `/state`만 GET, 나머지 전부 POST).
+- [x] `src/ui/network/AppsScriptDecisionSubmitter.ts` (신규): `DecisionSubmitter` 구현체.
+      `NetworkDecisionSubmitter.ts`와 동일 로직(가게 제출의 `retailPrice` 조건부 스프레드
+      포함), 클라이언트 타입만 `AppsScriptSessionClient`로 교체.
+- [x] 테스트 신규 2개 파일 18개: `tests/ui/network/appsScriptSessionClient.test.ts`(GET
+      쿼리/POST 바디 모양을 실제 `buildApiRequestFromPost`에 통과시켜 계약 자체를 검증,
+      `{status,body}` 봉투 언랩, 에러 상태코드별 `ApiError`/`translateNetworkError` 연동,
+      비정상 응답 방어 경로, 바디 없는 POST 검증), `tests/ui/network/AppsScriptDecisionSubmitter.test.ts`
+      (세 제출 메서드의 POST 경로/바디, `retailPrice` 생략 케이스). 전체 테스트 395개(기존
+      377 + 신규 18) 통과.
+- [x] 검증: `npm run typecheck`(세 tsconfig)·`npm run lint -- --max-warnings=0`·
+      `npm test -- --run`(395개)·`npm run build`(76 모듈, 신규 파일을 아직 아무도 import
+      안 해 기존과 동일) 모두 통과. code-reviewer 검토 완료(blocking 이슈 없음, 비차단 관찰
+      2건만 기록 — `unwrap()`의 `NaN` 상태코드 견고성 이론적 갭, Apps Script가 JSON 봉투
+      대신 Google 자체 오류 페이지를 반환할 때 `ApiError`로 안 감싸이는 기존 `sessionClient.ts`
+      공유 한계). 상세 근거는 docs/DECISIONS.md D-032 참고.
 - [ ] **이번에도 다루지 않은 것(다음 작업)**: 실제 Google 계정/OAuth/배포/Sheets API 호출
-      (근본적으로 이 리포지토리 안에서는 검증 불가능 — `entry.ts`의 문서 주석 참고),
-      Apps Script용 `sessionClient.ts`(학생 클라이언트가 응답 바디의 `status` 필드로
-      성공/실패를 판단하는 계층), 실제 배포 가이드 문서.
+      (근본적으로 이 리포지토리 안에서는 검증 불가능 — `entry.ts`의 문서 주석 참고), 화면
+      배선(`NetworkGameScreen`/`NetworkJoinScreen`/`App.tsx`가 로컬 서버용/Apps Script용
+      클라이언트 중 무엇을 쓸지 고르게 하는 것 — 실제 배포된 `.../exec` URL 없이는 의미
+      있게 검증 불가), `useAppsScriptGameSession.ts`(로컬 서버용 `useNetworkGameSession.ts`
+      대응 React 훅 — 이 저장소에 jsdom/`@testing-library/react`가 없어 훅 자체를 테스트할
+      방법이 없어 미룸), 실제 배포 가이드 문서.
 
 ## Milestone 6 — UX 개선, 밸런싱, 교육 기능 확장
 
