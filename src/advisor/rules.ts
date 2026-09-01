@@ -121,6 +121,15 @@ export interface AdvisorRules {
    * 낮을 수 있다" 후보를 제시한다. 0.2 = 가진 돈의 20% 이하만 썼다는 뜻이다.
    */
   householdLowBudgetUsageRatio: number;
+
+  /**
+   * 이 라운드부터 기업/가게 턴 비서가 "가격·품질 경쟁 전략" 안내 문장을 situationSummary에
+   * 추가한다. docs/ROUND_FLOW.md의 5라운드 커리큘럼 단계에 맞춘 값이며, 이 값은
+   * economy/config.ts의 MIN_ROUND_FOR_INDUSTRY_ACTIONS(실제 업종전환/전문이탈판매 메커니즘
+   * 게이트)와는 무관하다 — 어떤 메커니즘도 열거나 잠그지 않고, 이미 1라운드부터 가능했던
+   * 가격/품질 결정(D-022)을 바라보는 관점만 짚어준다.
+   */
+  competitionFocusMinRound: number;
 }
 
 export const DEFAULT_ADVISOR_RULES: AdvisorRules = {
@@ -144,4 +153,5 @@ export const DEFAULT_ADVISOR_RULES: AdvisorRules = {
   householdHighCategorySpendShareRatio: 0.8,
   householdHighBudgetUsageRatio: 0.9,
   householdLowBudgetUsageRatio: 0.2,
+  competitionFocusMinRound: 5,
 };

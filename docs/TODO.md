@@ -1196,6 +1196,11 @@ JSON `{status, body}` 봉투)을 따르는 클라이언트를 준비해둔다. �
       `specialtyMismatchPenalty`가 실제로 적용된다(이전에는 정의만 있고 호출되지 않았음).
       사람이 생산/매입 입력은 냈지만 전환 필드를 비운 경우는 "전환하지 않기로 선택"으로
       취급되며 봇 전환 로직이 대신 실행되지 않는다(회귀 테스트로 고정).
+- [x] 5라운드부터 가격/품질 경쟁 안내 문구 추가 (D-034, "제안 A"). `docs/ROUND_FLOW.md`의
+      5라운드 커리큘럼 문구와 실제 게임 경험(가격/품질은 1라운드부터 이미 자유 결정 가능,
+      D-022) 사이의 간극을 경제 공식/데이터 변경 없이 전략 비서 안내 문구로만 좁혔다.
+      `AdvisorRules.competitionFocusMinRound=5`(신규, `MIN_ROUND_FOR_INDUSTRY_ACTIONS`와
+      무관한 별개 설정)부터 기업/가게 턴 비서 `situationSummary`에 안내 문장 1개가 추가된다.
 - [ ] 4~7라운드 커리큘럼의 나머지 차별화(그 밖의 경쟁 전략/시장 변화 이벤트) — Milestone 2까지는
       전 라운드가 동일 규칙으로 진행되며, 이는 Milestone 2의 미완성이 아니라 애초에 이 단계
       범위 밖이다 (CLAUDE.md 6절, docs/ROUND_FLOW.md 참고)

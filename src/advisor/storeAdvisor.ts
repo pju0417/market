@@ -103,6 +103,12 @@ export function analyzeStoreTurn(
     situationSummary.push("아직 참고할 소매시장 마감 시세가 없습니다 (첫 라운드이거나 지난 라운드에 매물이 없었습니다).");
   }
 
+  if (state.currentRound >= rules.competitionFocusMinRound) {
+    situationSummary.push(
+      `${rules.competitionFocusMinRound}라운드부터는 가격과 품질 경쟁이 중요해지는 단계입니다. 소매가뿐 아니라 어떤 품질의 상품을 매입해서 팔지도 경쟁력에 영향을 줄 수 있습니다.`,
+    );
+  }
+
   if (categoryId !== null) {
     if (categoryId === store.specialtyCategoryId) {
       situationSummary.push(`현재 전문 업종(${CATEGORY_NAMES_KO[categoryId]}) 안에서 매입·판매하고 있습니다.`);

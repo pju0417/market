@@ -65,12 +65,13 @@ function makeState(options: {
   roundMetrics?: RoundMetrics[];
   wholesaleListings?: GameState["wholesaleListings"];
   retailListings?: GameState["retailListings"];
+  currentRound?: number;
 }): GameState {
   const companies: Record<string, CompanyState> = {};
   const households: Record<string, HouseholdState> = {};
   return {
     config: { totalRounds: 7, studentPlayerIds: ["student-1"], rngSeed: 1 },
-    currentRound: 2,
+    currentRound: options.currentRound ?? 2,
     currentPhase: "store-turn",
     players: [{ id: "student-1", displayName: "Student 1", companyId: "c1", storeId: "s1", householdId: "h1" }],
     companies,
@@ -702,6 +703,38 @@ describe("analyzeStoreTurn", () => {
       expect(analyzeStoreTurn(state, "s1").causeHypotheses.some((h) => h.id === "high-fixed-cost-burden")).toBe(true);
       const raised = analyzeStoreTurn(state, "s1", { ...DEFAULT_ADVISOR_RULES, highFixedCostToCashRatio: 10 });
       expect(raised.causeHypotheses.some((h) => h.id === "high-fixed-cost-burden")).toBe(false);
+    });
+  });
+
+  describe("competitionFocusMinRound (Milestone 6 제안 A: 5라운드부터 가격/품질 경쟁 안내 문구)", () => {
+    it("does not mention price/quality competition before the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 4 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(false);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("mentions price/quality competition exactly at the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 5 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(true);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("keeps mentioning price/quality competition well after the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 7 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(true);
+      expectWellFormedAdvice(advice);
     });
   });
 });

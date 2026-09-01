@@ -54,12 +54,13 @@ function makeState(options: {
   companies: Record<string, CompanyState>;
   roundMetrics?: RoundMetrics[];
   wholesaleListings?: GameState["wholesaleListings"];
+  currentRound?: number;
 }): GameState {
   const stores: Record<string, StoreState> = {};
   const households: Record<string, HouseholdState> = {};
   return {
     config: { totalRounds: 7, studentPlayerIds: ["student-1"], rngSeed: 1 },
-    currentRound: 2,
+    currentRound: options.currentRound ?? 2,
     currentPhase: "company-turn",
     players: [{ id: "student-1", displayName: "Student 1", companyId: "c1", storeId: "s1", householdId: "h1" }],
     companies: options.companies,
@@ -531,6 +532,38 @@ describe("analyzeCompanyTurn", () => {
       expect(analyzeCompanyTurn(state, "c1").causeHypotheses.some((h) => h.id === "high-competition")).toBe(false);
       const lowered = analyzeCompanyTurn(state, "c1", { ...DEFAULT_ADVISOR_RULES, highCompetitorCount: 2 });
       expect(lowered.causeHypotheses.some((h) => h.id === "high-competition")).toBe(true);
+    });
+  });
+
+  describe("competitionFocusMinRound (Milestone 6 제안 A: 5라운드부터 가격/품질 경쟁 안내 문구)", () => {
+    it("does not mention price/quality competition before the threshold round", () => {
+      const company = makeCompany();
+      const state = makeState({ companies: { c1: company }, currentRound: 4 });
+
+      const advice = analyzeCompanyTurn(state, "c1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(false);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("mentions price/quality competition exactly at the threshold round", () => {
+      const company = makeCompany();
+      const state = makeState({ companies: { c1: company }, currentRound: 5 });
+
+      const advice = analyzeCompanyTurn(state, "c1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(true);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("keeps mentioning price/quality competition well after the threshold round", () => {
+      const company = makeCompany();
+      const state = makeState({ companies: { c1: company }, currentRound: 7 });
+
+      const advice = analyzeCompanyTurn(state, "c1");
+
+      expect(advice.situationSummary.some((line) => line.includes("가격과 품질 경쟁"))).toBe(true);
+      expectWellFormedAdvice(advice);
     });
   });
 });

@@ -75,6 +75,12 @@ export function analyzeCompanyTurn(
     situationSummary.push("아직 참고할 같은 업종의 시장 시세 데이터가 없습니다 (첫 라운드이거나 지난 라운드에 매물이 없었습니다).");
   }
 
+  if (state.currentRound >= rules.competitionFocusMinRound) {
+    situationSummary.push(
+      `${rules.competitionFocusMinRound}라운드부터는 가격과 품질 경쟁이 중요해지는 단계입니다. 위 시장 평균가·평균 품질과 비교해 내 도매가와 품질을 어떻게 가져갈지 판단해볼 시점입니다.`,
+    );
+  }
+
   const causeHypotheses: CauseHypothesis[] = [];
 
   const inventoryCarryoverRatio =
