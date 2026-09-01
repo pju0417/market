@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
 import {
+  companyUnitCost,
   industrySwitchCost,
   MIN_ROUND_FOR_INDUSTRY_ACTIONS,
   NPC_INDUSTRY_SWITCH_RULES,
@@ -9,12 +10,14 @@ import {
 } from "../../src/economy/config.js";
 import {
   decideCompanyIndustrySwitch,
+  decideCompanyMarketEventSwitch,
   decideCompanyProduction,
   decideHouseholdPurchases,
   decideStorePurchases,
   decideStoreSpecialtyDeviation,
   scoreListingForBuyer,
 } from "../../src/npc/decisions.js";
+import type { ActiveMarketEvent } from "../../src/economy/marketEvents.js";
 import type {
   CompanyState,
   GameState,
@@ -155,6 +158,40 @@ describe("decideCompanyProduction", () => {
 
     expect(stockedDecision!.quantity).toBeLessThan(freshDecision!.quantity);
     expect(stockedDecision!.quantity).toBe(0);
+  });
+
+  describe("costMultiplier (Milestone 6 제안 C, docs/DECISIONS.md D-035)", () => {
+    it("defaults to 1 (omitting costMultiplier is 100% identical to the pre-existing behavior)", () => {
+      const company = makeCompany();
+      const withoutArg = decideCompanyProduction(company, 37, createRng(1));
+      const withExplicit1 = decideCompanyProduction(company, 37, createRng(1), 1);
+
+      expect(withExplicit1).toEqual(withoutArg);
+    });
+
+    it("scales the effective unit cost, shrinking affordable quantity accordingly", () => {
+      const company = makeCompany({ districtId: "downtown" }); // food unit cost = 4 / 0.7
+      const unitCost = companyUnitCost("food", "downtown");
+      const cash = unitCost * 10; // affords exactly 10 units at the base unit cost
+
+      const base = decideCompanyProduction(company, cash, createRng(1), 1);
+      const scaled = decideCompanyProduction(company, cash, createRng(1), 1.3);
+
+      expect(base!.quantity).toBe(10);
+      expect(scaled!.quantity).toBe(Math.floor(cash / (unitCost * 1.3)));
+      expect(scaled!.quantity).toBeLessThan(base!.quantity);
+    });
+
+    it("can push affordable quantity down to exactly 0 at the boundary", () => {
+      const company = makeCompany({ districtId: "downtown" });
+      const unitCost = companyUnitCost("food", "downtown");
+      // Just enough cash for 1 unit at the base cost, but not enough once multiplied by 1.3.
+      const cash = unitCost * 1.2;
+
+      const decision = decideCompanyProduction(company, cash, createRng(1), 1.3);
+
+      expect(decision!.quantity).toBe(0);
+    });
   });
 });
 
@@ -301,6 +338,185 @@ describe("decideCompanyIndustrySwitch (Milestone 6, D-033)", () => {
     expect(company.inventoryQuantity).toBe(0);
     expect(company.quality).toBe(0);
     expect(company.lastIndustrySwitchRound).toBe(MIN_ROUND_FOR_INDUSTRY_ACTIONS);
+  });
+});
+
+describe("decideCompanyMarketEventSwitch (Milestone 6 제안 C, docs/DECISIONS.md D-035)", () => {
+  // food unit cost during the event = companyUnitCost(food, downtown) * 1.3, chosen to exactly
+  // equal the food wholesale average price below, so stayRoundProfit works out to exactly 0
+  // regardless of quantity (profit = quantity * (avgPrice - unitCost)). This makes the "series
+  // profit" math easy to reason about in the remaining-rounds test.
+  const foodUnitCostDuringEvent = companyUnitCost("food", "downtown") * 1.3;
+  const toysUnitCost = companyUnitCost("toys", "downtown");
+  const switchCost = industrySwitchCost("food", "toys"); // 100 * (1 - 0.3) = 70
+  // toysAvgPrice is chosen so switchRoundProfit works out to exactly 20 * 3 = 60 per round
+  // (quantity is 20 for both stay/switch projections given the cash levels used below).
+  const toysAvgPrice = toysUnitCost + 3;
+
+  const foodEvent: ActiveMarketEvent = { categoryId: "food", costMultiplier: 1.3 };
+
+  function makeSwitchableCompany(overrides: Partial<CompanyState> = {}): CompanyState {
+    return makeCompany({
+      id: "c1",
+      productCategoryId: "food",
+      districtId: "downtown",
+      strategyId: "stable",
+      ledger: { cash: 1000, cumulativeProfit: 0 },
+      ...overrides,
+    });
+  }
+
+  function makeMarketState(overrides: Partial<GameState> = {}): GameState {
+    return makeGameState({
+      currentRound: 6,
+      wholesaleListings: [
+        { id: "w-food", companyId: "other", categoryId: "food", quantityAvailable: 100, quality: 0.5, price: foodUnitCostDuringEvent },
+        { id: "w-toys", companyId: "other", categoryId: "toys", quantityAvailable: 100, quality: 0.5, price: toysAvgPrice },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("does nothing when the company isn't in the event's category", () => {
+    const company = makeSwitchableCompany({ productCategoryId: "toys" });
+    const state = makeMarketState();
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("toys");
+    expect(company.ledger.cash).toBe(1000);
+  });
+
+  it("does nothing when the company has no assigned category", () => {
+    const company = makeSwitchableCompany({ productCategoryId: null });
+    const state = makeMarketState();
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBeNull();
+  });
+
+  it("does nothing before MIN_ROUND_FOR_INDUSTRY_ACTIONS even if the event category matches", () => {
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({ currentRound: MIN_ROUND_FOR_INDUSTRY_ACTIONS - 1 });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("does nothing when there is no wholesale market data for the current category", () => {
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({
+      wholesaleListings: [
+        { id: "w-toys", companyId: "other", categoryId: "toys", quantityAvailable: 100, quality: 0.5, price: toysAvgPrice },
+      ],
+    });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("does nothing when no candidate category has any wholesale market data", () => {
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({
+      wholesaleListings: [
+        { id: "w-food", companyId: "other", categoryId: "food", quantityAvailable: 100, quality: 0.5, price: foodUnitCostDuringEvent },
+      ],
+    });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("excludes a candidate whose switch cost exceeds current cash, leaving the company put when it's the only candidate", () => {
+    const company = makeSwitchableCompany({ ledger: { cash: switchCost - 1, cumulativeProfit: 0 } });
+    const state = makeMarketState();
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("food");
+    expect(company.ledger.cash).toBe(switchCost - 1);
+  });
+
+  it("skips an unaffordable candidate but still switches to a cheaper, affordable, favorable one", () => {
+    // electronics' switch cost (90, similarity 0.1) exceeds cash and must be excluded even though
+    // it would otherwise look attractive; apparel's switch cost (80, similarity 0.2) is affordable
+    // and offers a clearly positive net gain, so it should be picked instead. (toys is left out of
+    // the wholesale listings entirely here so it isn't a candidate at all.)
+    const apparelUnitCost = companyUnitCost("apparel", "downtown");
+    const apparelSwitchCost = industrySwitchCost("food", "apparel"); // 100 * (1 - 0.2) = 80
+    const electronicsSwitchCost = industrySwitchCost("food", "electronics"); // 100 * (1 - 0.1) = 90
+    const electronicsUnitCost = companyUnitCost("electronics", "downtown");
+    const cash = 89; // >= apparelSwitchCost (80), < electronicsSwitchCost (90)
+    expect(apparelSwitchCost).toBeLessThanOrEqual(cash);
+    expect(electronicsSwitchCost).toBeGreaterThan(cash);
+
+    const company = makeSwitchableCompany({ ledger: { cash, cumulativeProfit: 0 } });
+    const state = makeMarketState({
+      currentRound: 6,
+      wholesaleListings: [
+        { id: "w-food", companyId: "other", categoryId: "food", quantityAvailable: 100, quality: 0.5, price: foodUnitCostDuringEvent },
+        // Deliberately very attractive so that, if the cost filter were broken, electronics would
+        // wrongly win instead of being excluded.
+        { id: "w-electronics", companyId: "other", categoryId: "electronics", quantityAvailable: 100, quality: 0.5, price: electronicsUnitCost + 50 },
+        { id: "w-apparel", companyId: "other", categoryId: "apparel", quantityAvailable: 100, quality: 0.5, price: apparelUnitCost + 50 },
+      ],
+    });
+
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("apparel");
+  });
+
+  it("stays put when switching isn't worth it for the single remaining event round (round 7, remaining=1)", () => {
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({ currentRound: 7 });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    // stayRoundProfit is 0 (avgPrice == unitCost), switchRoundProfit*1 (60) - switchCost (70) = -10 <= 0.
+    expect(company.productCategoryId).toBe("food");
+  });
+
+  it("switches when the same per-round margin is compounded over more remaining event rounds (round 6, remaining=2)", () => {
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({ currentRound: 6 });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    // switchRoundProfit*2 (120) - switchCost (70) = 50 > staySeriesProfit (0).
+    expect(company.productCategoryId).toBe("toys");
+  });
+
+  it("on a confirmed switch, charges exactly the switch cost and resets inventory/quality, and stamps lastIndustrySwitchRound", () => {
+    const company = makeSwitchableCompany({ inventoryQuantity: 40, quality: 0.7 });
+    const state = makeMarketState({ currentRound: 6 });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(company.productCategoryId).toBe("toys");
+    expect(company.ledger.cash).toBe(1000 - switchCost);
+    expect(company.inventoryQuantity).toBe(0);
+    expect(company.quality).toBe(0);
+    expect(company.lastIndustrySwitchRound).toBe(6);
+  });
+
+  it("never consumes any externally supplied rng stream (it only uses an internal dummy for the projection)", () => {
+    const untouchedRng = createRng(777);
+    const untouchedSequence = [untouchedRng(), untouchedRng(), untouchedRng()];
+
+    // A gameplay rng stream that is never passed to decideCompanyMarketEventSwitch at all (the
+    // function's signature doesn't even accept one) must be completely unaffected by calling it.
+    const gameplayRng = createRng(777);
+    const beforeCall = [gameplayRng(), gameplayRng(), gameplayRng()];
+
+    const company = makeSwitchableCompany();
+    const state = makeMarketState({ currentRound: 6 });
+    decideCompanyMarketEventSwitch(company, state, foodEvent);
+
+    expect(beforeCall).toEqual(untouchedSequence);
+    expect(company.productCategoryId).toBe("toys"); // sanity check the call actually did something
+
+    // Calling it again from an identical starting state produces an identical result
+    // (determinism: no hidden randomness anywhere in the decision).
+    const company2 = makeSwitchableCompany();
+    const state2 = makeMarketState({ currentRound: 6 });
+    decideCompanyMarketEventSwitch(company2, state2, foodEvent);
+    expect(company2).toEqual(company);
   });
 });
 

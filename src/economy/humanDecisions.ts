@@ -66,15 +66,16 @@ export function resolveCompanyDecision(
   availableCash: number,
   humanInput: CompanyDecisionInput | undefined,
   rng: Rng,
+  costMultiplier = 1,
 ): CompanyProductionDecision | null {
   if (humanInput === undefined) {
-    return decideCompanyProduction(company, availableCash, rng);
+    return decideCompanyProduction(company, availableCash, rng, costMultiplier);
   }
   const categoryId = company.productCategoryId;
   if (categoryId === null) {
     return null;
   }
-  const unitCost = companyUnitCost(categoryId, company.districtId);
+  const unitCost = companyUnitCost(categoryId, company.districtId) * costMultiplier;
   const affordableQuantity = Math.floor(Math.max(0, availableCash) / unitCost);
   const quantity = Math.max(0, Math.min(Math.floor(humanInput.quantity), affordableQuantity));
   const quality = Math.min(1, Math.max(0, humanInput.quality));

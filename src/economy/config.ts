@@ -261,6 +261,22 @@ export function essentialNpcPriorityBonus(categoryId: ProductCategoryId): number
   return ESSENTIAL_CATEGORY_NPC_PRIORITY_BONUS[categoryId] ?? 0;
 }
 
+/**
+ * 시장 변화 이벤트("원자재비 변동", Milestone 6, docs/DECISIONS.md D-035) 발생 라운드. 다른
+ * 곳에 이 숫자들을 하드코딩하지 않고 src/economy/marketEvents.ts의 헬퍼 뒤에 숨긴다.
+ */
+export const MARKET_EVENT_ROUNDS: readonly number[] = [6, 7];
+
+/** 이벤트 발생 시 해당 카테고리의 그 라운드 companyUnitCost 결과값 전체에 곱해지는 배율. */
+export const MARKET_EVENT_COST_MULTIPLIER = 1.3;
+
+/**
+ * 시장 변화 이벤트 대상 카테고리를 뽑는 데 쓰는 rng 시드 오프셋. 게임플레이 rng(`rngSeed+1`,
+ * src/engine/simulateGame.ts)나 초기화 rng(`rngSeed` 단독)와 절대 겹치지 않아야 결정론이
+ * 보존된다 — 실제로 겹치지 않는 임의의 큰 값을 쓴다.
+ */
+export const MARKET_EVENT_RNG_SEED_OFFSET = 9001;
+
 export const NPC_TARGETS = {
   /** 카테고리 하나당 최소 몇 개 기업(학생+NPC 합계)이 있어야 하는가. */
   minCompaniesPerCategory: 2,

@@ -17,6 +17,7 @@ import {
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
+import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
 import {
@@ -28,7 +29,7 @@ import {
   type CompanyDecisionInput,
   type PurchaseRequestLine,
 } from "../economy/humanDecisions.js";
-import { decideCompanyIndustrySwitch, decideStoreSpecialtyDeviation } from "../npc/decisions.js";
+import { decideCompanyIndustrySwitch, decideCompanyMarketEventSwitch, decideStoreSpecialtyDeviation } from "../npc/decisions.js";
 import { planNpcBackfill } from "../npc/backfill.js";
 import type {
   CompanyState,
@@ -275,14 +276,31 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       // 생산량을 계산한다. 사람 입력이 아예 없는 완전 봇 참가자만 NPC 전환 로직을 탄다 — 사람이
       // 생산 입력은 냈지만 switchToCategoryId를 비운 경우는 resolveCompanyIndustrySwitch가
       // "전환하지 않기로 선택"으로 조용히 무시한다(봇이 학생의 선택을 뒤집지 않는다).
+      //
+      // 시장 변화 이벤트(Milestone 6 제안 C, docs/DECISIONS.md D-035) 대상 카테고리에 속한
+      // 완전 봇 기업은 D-033의 확률적 전환 대신 결정론적 손익비교 전환(decideCompanyMarketEventSwitch)
+      // 을 탄다 — 두 봇 전환 로직은 상호 배타적으로만 호출해야 한다(동시 호출 시 이중 전환/이중
+      // 비용 차감 버그가 난다).
       const humanInput = decisionSource?.getCompanyInput(company.id);
+      const marketEvent = getActiveMarketEvent(state.config.rngSeed, state.currentRound);
       if (humanInput === undefined) {
-        decideCompanyIndustrySwitch(company, state, rng);
+        if (marketEvent !== undefined && company.productCategoryId === marketEvent.categoryId) {
+          decideCompanyMarketEventSwitch(company, state, marketEvent);
+        } else {
+          decideCompanyIndustrySwitch(company, state, rng);
+        }
       } else {
         resolveCompanyIndustrySwitch(company, state.currentRound, humanInput.switchToCategoryId);
       }
 
-      const decision = resolveCompanyDecision(company, company.ledger.cash, humanInput, rng);
+      // 전환 처리가 끝난 "이후" 카테고리로 배율을 판정한다 — 전환해서 이벤트 카테고리를
+      // 벗어났다면 배율은 자연히 1이 된다. marketEvent 자체는 순수 함수 결과라 재계산해도
+      // 값이 같으므로 위에서 구한 값을 그대로 재사용한다.
+      const costMultiplier =
+        company.productCategoryId !== null
+          ? marketEventCostMultiplierFor(company.productCategoryId, marketEvent)
+          : 1;
+      const decision = resolveCompanyDecision(company, company.ledger.cash, humanInput, rng, costMultiplier);
       if (decision === null || decision.quantity <= 0) continue;
 
       acc.companyUnitsProduced[company.id] = (acc.companyUnitsProduced[company.id] ?? 0) + decision.quantity;

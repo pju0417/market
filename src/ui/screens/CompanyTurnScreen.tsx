@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
 import { companyUnitCost, industrySwitchCost, MIN_ROUND_FOR_INDUSTRY_ACTIONS, PRODUCT_CATEGORIES } from "../../economy/config.js";
+import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../../economy/marketEvents.js";
 import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { CompanyState, GameState, ProductCategoryId } from "../../types/domain.js";
 import { CATEGORY_LABELS, DISTRICT_LABELS, formatWon } from "../labels.js";
@@ -12,6 +13,7 @@ import {
   isOverBudget,
 } from "../turnCalculations.js";
 import { AdvisorPanel } from "./AdvisorPanel.js";
+import { MarketEventBanner } from "./MarketEventBanner.js";
 
 interface Props {
   session: DecisionSubmitter;
@@ -50,7 +52,17 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
   // 순서, src/engine/simulateGame.ts). 미리보기도 같은 순서로 계산해야 실제 제출 결과와
   // 어긋나지 않는다.
   const effectiveProductCategoryId = switchToCategoryId !== "" ? switchToCategoryId : company.productCategoryId;
-  const unitCost = effectiveProductCategoryId ? companyUnitCost(effectiveProductCategoryId, company.districtId) : 0;
+  // 서버는 전환 처리가 끝난 "이후" 카테고리로 시장 변화 이벤트 배율을 판정한다
+  // (getActiveMarketEvent + marketEventCostMultiplierFor, src/engine/simulateGame.ts) — 미리보기도
+  // 같은 판정을 반영해야 실제 제출 결과와 어긋나지 않는다 (Milestone 6, docs/DECISIONS.md D-035,
+  // D-033 Major 재발 방지).
+  const marketEvent = getActiveMarketEvent(state.config.rngSeed, state.currentRound);
+  const costMultiplier = effectiveProductCategoryId
+    ? marketEventCostMultiplierFor(effectiveProductCategoryId, marketEvent)
+    : 1;
+  const unitCost = effectiveProductCategoryId
+    ? companyUnitCost(effectiveProductCategoryId, company.districtId) * costMultiplier
+    : 0;
   const cashAfterSwitch = Math.max(0, availableCash - switchCost);
   const maxAffordable = computeMaxAffordable(cashAfterSwitch, unitCost);
 
@@ -61,6 +73,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
 
   return (
     <>
+    <MarketEventBanner state={state} role="company" />
     <div className="card">
       <h2>기업 턴</h2>
       <div className="stat-row">

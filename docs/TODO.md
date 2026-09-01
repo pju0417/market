@@ -1201,9 +1201,20 @@ JSON `{status, body}` 봉투)을 따르는 클라이언트를 준비해둔다. �
       D-022) 사이의 간극을 경제 공식/데이터 변경 없이 전략 비서 안내 문구로만 좁혔다.
       `AdvisorRules.competitionFocusMinRound=5`(신규, `MIN_ROUND_FOR_INDUSTRY_ACTIONS`와
       무관한 별개 설정)부터 기업/가게 턴 비서 `situationSummary`에 안내 문장 1개가 추가된다.
-- [ ] 4~7라운드 커리큘럼의 나머지 차별화(그 밖의 경쟁 전략/시장 변화 이벤트) — Milestone 2까지는
-      전 라운드가 동일 규칙으로 진행되며, 이는 Milestone 2의 미완성이 아니라 애초에 이 단계
-      범위 밖이다 (CLAUDE.md 6절, docs/ROUND_FLOW.md 참고)
+- [x] 6·7라운드 시장 변화 이벤트("원자재비 변동") 도입 (D-035, "제안 C"). 배율 1.3배,
+      [6,7]라운드 항상 발생, 대상 카테고리는 매 게임 무작위(결정론적) 선정, 상시 배너로
+      기업/가게/가계 턴 화면 셋 다 공지. NPC 생산량은 별도 축소 로직 없이 기존
+      "가용현금÷단가" 클램핑이 자연히 줄이고, NPC 업종 전환은 고정 확률이 아니라
+      "남았을 때 vs 전환했을 때"(전환비용 포함, 잔여 이벤트 라운드 반복 가정) 결정론적
+      손익 비교로 결정한다(`decideCompanyMarketEventSwitch`, D-033의
+      `decideCompanyIndustrySwitch`와 상호 배타). `src/economy/marketEvents.ts`(신규)는
+      게임플레이 rng와 완전히 분리된 순수 함수라 이벤트 유무와 무관하게 다른 라운드
+      결과는 완전히 동일하다. economy-reviewer 검토 대상으로 남긴 관찰: 결정론적 전환의
+      쏠림 가능성, `students=5 seed=1`의 이례적 시장점유율 집중.
+- [ ] 4~7라운드 커리큘럼의 나머지 차별화(경쟁 전략의 나머지 축인 상품구성/전문화/광고 등) —
+      이번 반복에서는 원자재비 변동 이벤트 하나만 구현했다. Milestone 2까지는 전 라운드가
+      동일 규칙으로 진행되며, 이는 Milestone 2의 미완성이 아니라 애초에 이 단계 범위
+      밖이다 (CLAUDE.md 6절, docs/ROUND_FLOW.md 참고)
 
 ## 참고: 이번 단계에서 의도적으로 구현하지 않은 것
 

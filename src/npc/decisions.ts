@@ -15,6 +15,7 @@ import {
   essentialNpcPriorityBonus,
   HOUSEHOLD_STRATEGY_PRESETS,
   industrySwitchCost,
+  MIN_ROUND_FOR_INDUSTRY_ACTIONS,
   NPC_INDUSTRY_SWITCH_RULES,
   NPC_STORE_SPECIALTY_DEVIATION_RULES,
   PRODUCT_CATEGORIES,
@@ -22,6 +23,7 @@ import {
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
 import { estimateCategoryMargin, computeCategoryAverages } from "../economy/marketStats.js";
+import { countRemainingMarketEventRounds, type ActiveMarketEvent } from "../economy/marketEvents.js";
 import { rngRange, type Rng } from "../economy/rng.js";
 import { chargeDiscretionary } from "../economy/settlement.js";
 import type {
@@ -34,6 +36,9 @@ import type {
   StoreState,
   WholesaleListing,
 } from "../types/domain.js";
+
+/** 손익 투사에서 실제 게임 rng 스트림을 절대 소비하지 않기 위한 더미(품질 지터만 고정값으로 만든다). */
+const PROJECTION_RNG: Rng = () => 0.5;
 
 /** 한 참여자가 매 라운드 생산/매입을 시도하는 기준 수량. 전략 배율이 곱해진다. */
 const BASE_PRODUCTION_QUANTITY = 20;
@@ -58,13 +63,14 @@ export function decideCompanyProduction(
   company: CompanyState,
   availableCash: number,
   rng: Rng,
+  costMultiplier = 1,
 ): CompanyProductionDecision | null {
   const categoryId = company.productCategoryId;
   if (categoryId === null) {
     return null;
   }
   const preset = COMPANY_STRATEGY_PRESETS[company.strategyId];
-  const unitCost = companyUnitCost(categoryId, company.districtId);
+  const unitCost = companyUnitCost(categoryId, company.districtId) * costMultiplier;
 
   // "적정 재고까지만 채운다"(order-up-to) 정책: 이미 안 팔린 재고가 많으면 그만큼 덜
   // 생산한다. 재고를 보지 않고 매번 목표량을 그대로 생산하면 안 팔린 물량이 쌓이는 동안에도
@@ -132,6 +138,80 @@ export function decideCompanyIndustrySwitch(company: CompanyState, state: GameSt
   if (cost > company.ledger.cash) return;
 
   chargeDiscretionary(company.ledger, cost);
+  company.productCategoryId = bestCategory;
+  company.inventoryQuantity = 0;
+  company.quality = 0;
+  company.lastIndustrySwitchRound = state.currentRound;
+}
+
+/**
+ * 시장 변화 이벤트("원자재비 변동", Milestone 6 제안 C, docs/DECISIONS.md D-035) 대상
+ * 카테고리에 속한 NPC 기업의 전환 결정. decideCompanyIndustrySwitch(D-033)와 달리 확률
+ * 판정이 없다 — "잔여 이벤트 라운드 동안 같은 여건이 반복된다"고 가정한 총이득을 결정론적으로
+ * 비교해, 전환이 명백히 더 유리할 때만(순이득 > 0) 전환한다. runCompanyTurn
+ * (src/engine/simulateGame.ts)은 이 기업이 이벤트 대상 카테고리에 속해 있고 사람 입력이 전혀
+ * 없을 때만 이 함수를 호출해야 한다 — decideCompanyIndustrySwitch와 상호 배타적으로 호출된다
+ * (한 기업에게 두 전환 로직이 같은 라운드에 동시에 적용되면 이중 전환/이중 비용 차감 버그가
+ * 난다).
+ */
+export function decideCompanyMarketEventSwitch(
+  company: CompanyState,
+  state: GameState,
+  marketEvent: ActiveMarketEvent,
+): void {
+  const currentCategory = company.productCategoryId;
+  if (currentCategory === null || currentCategory !== marketEvent.categoryId) return;
+  if (state.currentRound < MIN_ROUND_FOR_INDUSTRY_ACTIONS) return;
+
+  const stayAverages = computeCategoryAverages(state.wholesaleListings, currentCategory);
+  if (stayAverages === undefined) return;
+
+  const stayProjection = decideCompanyProduction(
+    company,
+    company.ledger.cash,
+    PROJECTION_RNG,
+    marketEvent.costMultiplier,
+  );
+  if (stayProjection === null) return;
+  const stayRoundProfit = stayProjection.quantity * stayAverages.averagePrice - stayProjection.productionCost;
+
+  const remaining = countRemainingMarketEventRounds(state.currentRound);
+  const staySeriesProfit = stayRoundProfit * remaining;
+
+  let bestCategory: ProductCategoryId | undefined;
+  let bestCost = 0;
+  let bestNetTotal = -Infinity;
+  for (const candidate of PRODUCT_CATEGORIES) {
+    if (candidate === currentCategory) continue;
+    const candidateAverages = computeCategoryAverages(state.wholesaleListings, candidate);
+    if (candidateAverages === undefined) continue;
+
+    const cost = industrySwitchCost(currentCategory, candidate);
+    if (cost > company.ledger.cash) continue;
+
+    const hypotheticalCompany: CompanyState = { ...company, productCategoryId: candidate, inventoryQuantity: 0 };
+    const switchProjection = decideCompanyProduction(
+      hypotheticalCompany,
+      company.ledger.cash - cost,
+      PROJECTION_RNG,
+      1,
+    );
+    if (switchProjection === null) continue;
+    const switchRoundProfit =
+      switchProjection.quantity * candidateAverages.averagePrice - switchProjection.productionCost;
+    const switchSeriesProfit = switchRoundProfit * remaining - cost;
+
+    const netTotal = switchSeriesProfit - staySeriesProfit;
+    if (netTotal > bestNetTotal) {
+      bestNetTotal = netTotal;
+      bestCategory = candidate;
+      bestCost = cost;
+    }
+  }
+
+  if (bestCategory === undefined || bestNetTotal <= 0) return;
+
+  chargeDiscretionary(company.ledger, bestCost);
   company.productCategoryId = bestCategory;
   company.inventoryQuantity = 0;
   company.quality = 0;

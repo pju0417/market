@@ -14,6 +14,7 @@ import {
   sumQuantities,
 } from "../turnCalculations.js";
 import { AdvisorPanel } from "./AdvisorPanel.js";
+import { MarketEventBanner } from "./MarketEventBanner.js";
 
 interface Props {
   session: DecisionSubmitter;
@@ -47,6 +48,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
 
   return (
     <>
+    <MarketEventBanner state={state} role="household" />
     <div className="card">
       <h2>가계 턴</h2>
       <div className="stat-row">
