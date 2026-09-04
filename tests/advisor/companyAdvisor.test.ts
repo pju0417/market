@@ -47,6 +47,8 @@ function emptyMetricsShape(round: number): Omit<RoundMetrics, "companyProfit" | 
     householdCategoryCount: {},
     householdTopCategorySpendShare: {},
     householdEssentialCategoriesMissed: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
   };
 }
 

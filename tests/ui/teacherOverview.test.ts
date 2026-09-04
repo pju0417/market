@@ -65,6 +65,8 @@ describe("teacherOverview", () => {
       householdCategoryCount: {},
       householdTopCategorySpendShare: {},
       householdEssentialCategoriesMissed: {},
+      wholesaleCategoryClearing: {},
+      retailCategoryClearing: {},
     };
     const latestMetrics: RoundMetrics = {
       round: 2,
@@ -91,6 +93,8 @@ describe("teacherOverview", () => {
       householdCategoryCount: {},
       householdTopCategorySpendShare: {},
       householdEssentialCategoriesMissed: {},
+      wholesaleCategoryClearing: {},
+      retailCategoryClearing: {},
     };
     state.roundMetrics.push(oldMetrics, latestMetrics);
 
@@ -144,6 +148,8 @@ describe("teacherOverview", () => {
       householdCategoryCount: {},
       householdTopCategorySpendShare: {},
       householdEssentialCategoriesMissed: {},
+      wholesaleCategoryClearing: {},
+      retailCategoryClearing: {},
     };
     state.roundMetrics.push(metrics);
 

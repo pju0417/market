@@ -97,9 +97,13 @@ function LocalGameFlow() {
 
       {screen.kind === "setup" && (
         <SetupScreen
-          onStart={(choices: BusinessSetupChoices) => {
+          onStart={(choices: BusinessSetupChoices, timeoutSettings) => {
             const rngSeed = Date.now();
-            setScreen({ kind: "playing", init: { rngSeed, choices }, key: rngSeed });
+            setScreen({
+              kind: "playing",
+              init: { rngSeed, choices, ...(timeoutSettings !== undefined && { timeoutSettings }) },
+              key: rngSeed,
+            });
           }}
         />
       )}

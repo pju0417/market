@@ -28,10 +28,25 @@ function req(partial: Partial<ApiRequest> & Pick<ApiRequest, "method" | "path">)
  */
 async function createTestSession(
   studentCount = 2,
-  options: { closeLobby?: boolean } = {},
+  options: {
+    closeLobby?: boolean;
+    submissionTimeoutEnabled?: boolean;
+    submissionTimeoutMs?: number;
+    npcGraduatedEntryEnabled?: boolean;
+  } = {},
 ): Promise<{ sessionId: string; teacherToken: string }> {
   const response = await handleApiRequest(
-    req({ method: "POST", path: "/api/sessions", body: { studentCount, rngSeed: 1 } }),
+    req({
+      method: "POST",
+      path: "/api/sessions",
+      body: {
+        studentCount,
+        rngSeed: 1,
+        ...(options.submissionTimeoutEnabled !== undefined && { submissionTimeoutEnabled: options.submissionTimeoutEnabled }),
+        ...(options.submissionTimeoutMs !== undefined && { submissionTimeoutMs: options.submissionTimeoutMs }),
+        ...(options.npcGraduatedEntryEnabled !== undefined && { npcGraduatedEntryEnabled: options.npcGraduatedEntryEnabled }),
+      },
+    }),
   );
   expect(response.status).toBe(201);
   const body = response.body as { sessionId: string; teacherToken: string };
@@ -552,6 +567,39 @@ describe("submission timeout and force-advance (Milestone 4 3단계, D-029)", ()
     const listingForA = state.wholesaleListings.find((listing) => listing.companyId === "student-1-company");
     expect(listingForA?.price).toBe(distinctiveWholesalePrice);
   });
+
+  it(
+    "honors a teacher-configured submissionTimeoutMs instead of the fixed DEFAULT_SUBMISSION_TIMEOUT_MS " +
+      "(구매 매칭 알고리즘 재설계 Stage 2 — checkAndApplyTimeout must read GameSession.getSubmissionTimeoutSettings())",
+    async () => {
+      const customTimeoutMs = 5_000;
+      const { sessionId } = await createTestSession(2, { submissionTimeoutMs: customTimeoutMs });
+
+      // Well short of the custom deadline: nothing should force-advance yet.
+      vi.advanceTimersByTime(customTimeoutMs - 1_000);
+      const beforeDeadline = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      expect((beforeDeadline.body as { state: { currentPhase: string } }).state.currentPhase).toBe("company-turn");
+
+      // Past the custom (short) deadline but still well under the old fixed 120s default —
+      // if this were still hardcoded to DEFAULT_SUBMISSION_TIMEOUT_MS, this would fail.
+      vi.advanceTimersByTime(2_000);
+      const afterDeadline = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      expect((afterDeadline.body as { state: { currentPhase: string } }).state.currentPhase).toBe("store-turn");
+    },
+  );
+
+  it(
+    "never force-advances when the teacher disabled the submission timeout (submissionTimeoutEnabled: false)",
+    async () => {
+      const { sessionId } = await createTestSession(2, { submissionTimeoutEnabled: false });
+
+      // Push far past the old fixed default (120s) — with the timeout disabled, nobody should
+      // ever be force-advanced by polling alone.
+      vi.advanceTimersByTime(DEFAULT_SUBMISSION_TIMEOUT_MS * 10);
+      const state = await handleApiRequest(req({ method: "GET", path: `/api/sessions/${sessionId}/state` }));
+      expect((state.body as { state: { currentPhase: string } }).state.currentPhase).toBe("company-turn");
+    },
+  );
 
   it("does not reset phaseStartedAt on partial/repeated submissions (cannot be used to extend other players' deadline)", async () => {
     const { sessionId } = await createTestSession(2);

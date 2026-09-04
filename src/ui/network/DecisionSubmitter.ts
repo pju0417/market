@@ -9,10 +9,10 @@
  * 만족하게 한다.
  */
 import type { ParticipantId } from "../../types/domain.js";
-import type { CompanyDecisionInput, PurchaseRequestLine, StoreDecisionInput } from "../../multiplayer/GameSession.js";
+import type { CategoryPurchaseRequest, CompanyDecisionInput, StoreDecisionInput } from "../../multiplayer/GameSession.js";
 
 export interface DecisionSubmitter {
   submitCompanyDecision(companyId: ParticipantId, input: CompanyDecisionInput): void | Promise<void>;
   submitStoreDecision(storeId: ParticipantId, input: StoreDecisionInput): void | Promise<void>;
-  submitHouseholdPurchases(householdId: ParticipantId, lines: PurchaseRequestLine[]): void | Promise<void>;
+  submitHouseholdPurchases(householdId: ParticipantId, requests: CategoryPurchaseRequest[]): void | Promise<void>;
 }

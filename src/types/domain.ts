@@ -138,6 +138,18 @@ export interface RetailListing {
   price: number;
 }
 
+/**
+ * 매물 스냅샷 비교(before/after)로 뽑아낸 카테고리별 시세 청산 요약 (구매 매칭 알고리즘
+ * 재설계 Stage 1). 새 수요/가격 공식이 아니라, 이미 있는 매물 배열을 비교한 결과만 담는다
+ * (src/economy/marketStats.ts의 computeCategoryClearingSummary 참고).
+ */
+export interface CategoryClearingSummary {
+  totalListed: number;
+  totalSold: number;
+  highestSoldPrice: number | undefined;
+  lowestUnsoldPrice: number | undefined;
+}
+
 /** 라운드별 시장/경영 지표 스냅샷. economy-reviewer 검토와 validate:economy가 사용한다. */
 export interface RoundMetrics {
   round: number;
@@ -182,6 +194,12 @@ export interface RoundMetrics {
    * 모두 충족했다는 뜻.
    */
   householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
+  /**
+   * 이 라운드 도매/소매 시장의 카테고리별 시세 청산 요약 (구매 매칭 알고리즘 재설계 Stage 1).
+   * 매물이 하나도 없었던 카테고리는 키 자체가 없다.
+   */
+  wholesaleCategoryClearing: Partial<Record<ProductCategoryId, CategoryClearingSummary>>;
+  retailCategoryClearing: Partial<Record<ProductCategoryId, CategoryClearingSummary>>;
 }
 
 /** 학생 한 명 = company + store + household 삼중 소유 (D-001). */

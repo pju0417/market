@@ -82,6 +82,46 @@ describe("appsScript/gasSessionStore", () => {
     expect(reloaded!.lobbyTimerConsumed).toBe(false);
   });
 
+  it(
+    "defaults to DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS (enabled) when createSession is called " +
+      "without timeoutSettings, and this survives a hydrate round-trip (구매 매칭 알고리즘 재설계 " +
+      "Stage 2 — code-reviewer critical bug: Apps Script sessions were silently dropping the " +
+      "server-appropriate default and falling back to GameSession's local single-player default)",
+    () => {
+      const gateway = new FakeSpreadsheetGateway();
+      const uuidGen = makeUuidGen();
+
+      const { sessionId, entry } = createSession(gateway, uuidGen, 2, 1);
+      expect(entry.session.getSubmissionTimeoutSettings()).toEqual({
+        enabled: true,
+        timeoutMs: 120_000,
+        npcGraduatedEntryEnabled: true,
+      });
+      saveSession(gateway, sessionId, entry);
+
+      const reloaded = getSession(gateway, sessionId)!;
+      expect(reloaded.session.getSubmissionTimeoutSettings()).toEqual({
+        enabled: true,
+        timeoutMs: 120_000,
+        npcGraduatedEntryEnabled: true,
+      });
+    },
+  );
+
+  it("persists an explicitly-provided (non-default) timeoutSettings through a hydrate round-trip", () => {
+    const gateway = new FakeSpreadsheetGateway();
+    const uuidGen = makeUuidGen();
+    const customTimeoutSettings = { enabled: false, timeoutMs: 5_000, npcGraduatedEntryEnabled: false };
+
+    const { sessionId, entry } = createSession(gateway, uuidGen, 2, 1, customTimeoutSettings);
+    expect(entry.session.getSubmissionTimeoutSettings()).toEqual(customTimeoutSettings);
+    saveSession(gateway, sessionId, entry);
+
+    // Simulate a brand new Apps Script request: only the gateway/sessionId survive.
+    const reloaded = getSession(gateway, sessionId)!;
+    expect(reloaded.session.getSubmissionTimeoutSettings()).toEqual(customTimeoutSettings);
+  });
+
   it("returns undefined for an unknown sessionId", () => {
     const gateway = new FakeSpreadsheetGateway();
     expect(getSession(gateway, "does-not-exist")).toBeUndefined();

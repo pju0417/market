@@ -37,6 +37,8 @@ function makeRoundMetrics(round: number, overrides: Partial<RoundMetrics> = {}):
     householdCategoryCount: {},
     householdTopCategorySpendShare: {},
     householdEssentialCategoriesMissed: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
     ...overrides,
   };
 }
@@ -45,6 +47,10 @@ const noopDecisionSource: HumanDecisionSource = {
   getCompanyInput: () => undefined,
   getStorePurchaseRequest: () => undefined,
   getHouseholdPurchaseRequest: () => undefined,
+  getStoreSubmissionReceivedAt: () => undefined,
+  getHouseholdSubmissionReceivedAt: () => undefined,
+  getPhaseStartedAt: () => 0,
+  getSubmissionTimeoutSettings: () => ({ enabled: false, timeoutMs: 120_000, npcGraduatedEntryEnabled: true }),
 };
 
 // seed=70004: round 6 and round 7 both resolve the event category to "food" (verified offline via

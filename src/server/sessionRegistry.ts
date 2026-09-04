@@ -8,8 +8,9 @@
 import { randomUUID } from "node:crypto";
 import { GameSession } from "../multiplayer/GameSession.js";
 import { TokenStore } from "./tokenStore.js";
-import { DEFAULT_LOBBY_TIMEOUT_MS } from "./timeoutConfig.js";
+import { DEFAULT_LOBBY_TIMEOUT_MS, DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS } from "./timeoutConfig.js";
 import type { ParticipantId, RoundPhase } from "../types/domain.js";
+import type { SubmissionTimeoutSettings } from "../multiplayer/GameSession.js";
 
 export interface SessionEntry {
   session: GameSession;
@@ -67,9 +68,26 @@ function generateUniqueSessionId(): string {
   throw new Error("failed to generate a unique session code after max attempts");
 }
 
-export function createSession(studentCount: number, rngSeed?: number): { sessionId: string; entry: SessionEntry } {
+/**
+ * `timeoutSettings`를 생략하면 `DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS`(다인원 서버
+ * 세션 기본값, D-029 기존 배포와 하위호환)를 쓴다 (구매 매칭 알고리즘 재설계 Stage 2). 교사가
+ * 세션 생성 시 명시적으로 넘긴 값은 그대로 `GameSession`에 전달된다 — `SessionEntry.phaseStartedAt`/
+ * `syncPhaseTimer`(서버 폴링 타임아웃, D-029/D-030)는 이 값과 무관하게 그대로 동작한다.
+ */
+export function createSession(
+  studentCount: number,
+  rngSeed?: number,
+  timeoutSettings?: SubmissionTimeoutSettings,
+): { sessionId: string; entry: SessionEntry } {
   const sessionId = generateUniqueSessionId();
-  const session = new GameSession(rngSeed ?? Date.now(), undefined, undefined, studentCount);
+  const session = new GameSession(
+    rngSeed ?? Date.now(),
+    undefined,
+    undefined,
+    studentCount,
+    undefined,
+    timeoutSettings ?? DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS,
+  );
   const entry: SessionEntry = {
     session,
     tokens: new TokenStore(),

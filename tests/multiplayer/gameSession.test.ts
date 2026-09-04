@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GameSession, SAVED_SESSION_STORAGE_KEY } from "../../src/multiplayer/GameSession.js";
 import { MemoryStorageAdapter } from "../../src/storage/MemoryStorageAdapter.js";
+import type { CategoryPurchaseRequest } from "../../src/economy/humanDecisions.js";
 
 describe("GameSession (D-021: single human player)", () => {
   it("creates exactly one human player plus NPC backfill", () => {
@@ -52,7 +53,7 @@ describe("GameSession (D-021: single human player)", () => {
   it("rejects a submission for the wrong phase", () => {
     const session = new GameSession(1);
 
-    expect(() => session.submitStoreDecision(session.getHumanPlayer().storeId, { purchases: [] })).toThrow();
+    expect(() => session.submitStoreDecision(session.getHumanPlayer().storeId, {})).toThrow();
   });
 
   it("lets the human set an explicit retail price, even with zero purchases this round", async () => {
@@ -63,7 +64,7 @@ describe("GameSession (D-021: single human player)", () => {
     await session.advancePhase(true); // wholesale-market-update
 
     expect(session.getState().currentPhase).toBe("store-turn");
-    session.submitStoreDecision(session.getHumanPlayer().storeId, { purchases: [], retailPrice: 12.5 });
+    session.submitStoreDecision(session.getHumanPlayer().storeId, { retailPrice: 12.5 });
     await session.advancePhase();
 
     const player = session.getHumanPlayer();
@@ -109,7 +110,7 @@ describe("GameSession (D-021: single human player)", () => {
     expect(session.getState().currentPhase).toBe("store-turn");
     version = session.getVersion();
 
-    session.submitStoreDecision(player.storeId, { purchases: [], retailPrice: 10 });
+    session.submitStoreDecision(player.storeId, { retailPrice: 10 });
     expect(session.getVersion()).toBeGreaterThan(version);
     version = session.getVersion();
 
@@ -400,7 +401,7 @@ describe("GameSession multiplayer core (Milestone 4 1단계: studentCount > 1, s
           price: 5,
         });
 
-        session.submitHouseholdPurchases(householdAId, [{ listingId: scarceListingId, quantity: 1 }]);
+        session.submitHouseholdPurchases(householdAId, [{ categoryId: "food", priorityPicks: [{ listingId: scarceListingId, quantity: 1 }], maxQuantity: 1 }]);
         session.submitHouseholdPurchases(householdBId, []);
         await session.advancePhase();
 
@@ -643,8 +644,8 @@ describe("GameSession.finalizeLobbyMembership (Milestone 4 6단계: 로비 미�
     while (session.getState().currentPhase !== "store-turn") {
       await session.advancePhase(true);
     }
-    session.submitStoreDecision(playerA!.storeId, { purchases: [] });
-    session.submitStoreDecision(playerB!.storeId, { purchases: [] });
+    session.submitStoreDecision(playerA!.storeId, {});
+    session.submitStoreDecision(playerB!.storeId, {});
     await session.advancePhase();
 
     while (session.getState().currentPhase !== "household-turn") {
@@ -743,8 +744,8 @@ describe("GameSession.exportPendingSubmissions / resumeFromState(pending) (Miles
     while (session.getState().currentPhase !== "store-turn") {
       await session.advancePhase(true);
     }
-    session.submitStoreDecision(playerA!.storeId, { purchases: [] });
-    session.submitStoreDecision(playerB!.storeId, { purchases: [] });
+    session.submitStoreDecision(playerA!.storeId, {});
+    session.submitStoreDecision(playerB!.storeId, {});
     await session.advancePhase();
     while (session.getState().currentPhase !== "household-turn") {
       await session.advancePhase(true);
@@ -784,5 +785,97 @@ describe("GameSession.exportPendingSubmissions / resumeFromState(pending) (Miles
     expect(resumed.isWaitingForHumanInput()).toBe(false);
     expect(resumed.getUnsubmittedParticipantIds()).toEqual([]);
     expect(resumed.getPlayers().map((p) => p.id)).toEqual(session.getPlayers().map((p) => p.id));
+  });
+
+  describe("phaseStartedAt / storeRequestReceivedAt / householdRequestReceivedAt round-trip", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("preserves the exact submission timestamp through export -> resumeFromState, and that restored timestamp actually drives orderBuyersForTurn's processing order (first submitter wins scarce stock)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+
+      const session = new GameSession(1, undefined, undefined, 2);
+      const [playerA, playerB] = session.getPlayers();
+
+      // Race through company-turn and store-turn with bot decisions (rngSeed=1 is fixed so this
+      // is fully deterministic) -- only household-turn contention matters for this test.
+      await session.advancePhase(true);
+      while (session.getState().currentPhase !== "household-turn") {
+        await session.advancePhase(true);
+      }
+
+      // Find an NPC-owned retail listing that both households are equally eligible to buy from
+      // (no self-trade issue either way) and that is genuinely scarce relative to what a single
+      // household could otherwise fully absorb (MAX_HOUSEHOLD_PURCHASE_UNITS=6/round): enough for
+      // one household to take a full 6, but not enough left over for a second household to also
+      // take 6. This is what makes "who gets processed first" an observable, deterministic effect.
+      const state = session.getState();
+      const scarceListing = state.retailListings.find((listing) => {
+        const store = state.stores[listing.storeId];
+        return (
+          store?.kind === "npc" &&
+          listing.quantityAvailable >= 7 &&
+          listing.quantityAvailable <= 11 &&
+          listing.price * 6 <= 100 // must be affordable for 6 units within a single round's budget
+        );
+      });
+      if (scarceListing === undefined) {
+        throw new Error(
+          "test assumption broken: rngSeed=1 no longer produces a scarce NPC retail listing " +
+            "in this shape -- update the seed or the search criteria",
+        );
+      }
+      // Capture plain values now -- runConsumerPurchases mutates retailListing objects in place
+      // (listing.quantityAvailable -= purchase.quantity), and `session.getState()` does not deep
+      // clone, so `scarceListing` itself would reflect post-purchase state by the time we assert.
+      const { id: scarceListingId, categoryId: scarceListingCategoryId, price: scarceListingPrice } = scarceListing;
+      const scarceListingInitialQuantity = scarceListing.quantityAvailable;
+
+      const makeRequest = (): CategoryPurchaseRequest[] => [
+        {
+          categoryId: scarceListingCategoryId,
+          priorityPicks: [{ listingId: scarceListingId, quantity: 6 }],
+          maxQuantity: 6,
+          // Excludes any other listing in the category from filling the shortfall, so a partial
+          // fill is only ever explained by "this listing ran out", never by auto-fill picking a
+          // different candidate.
+          maxUnitPrice: 1,
+        },
+      ];
+
+      vi.setSystemTime(1_000);
+      session.submitHouseholdPurchases(playerA!.householdId, makeRequest());
+
+      const exportedBeforeResume = session.exportPendingSubmissions();
+      expect(exportedBeforeResume.householdRequestReceivedAt[playerA!.householdId]).toBe(1_000);
+
+      // Simulate the instance disappearing and being rebuilt well after the original submission.
+      vi.setSystemTime(5_000);
+      const reconstructed = GameSession.resumeFromState(session.getState(), exportedBeforeResume);
+
+      // The restored timestamp must be the original one (1_000), not "now" (5_000) and not lost.
+      const exportedAfterResume = reconstructed.exportPendingSubmissions();
+      expect(exportedAfterResume.householdRequestReceivedAt[playerA!.householdId]).toBe(1_000);
+      expect(exportedAfterResume.phaseStartedAt).toBe(exportedBeforeResume.phaseStartedAt);
+
+      // playerB submits only after the restore, at the current (later) time.
+      reconstructed.submitHouseholdPurchases(playerB!.householdId, makeRequest());
+
+      await reconstructed.advancePhase(false);
+      const finalState = reconstructed.getState();
+      const householdA = finalState.households[playerA!.householdId]!;
+      const householdB = finalState.households[playerB!.householdId]!;
+
+      // If the restored receivedAt (1_000) had been lost/ignored, playerB (received at a finite
+      // 5_000) would have been treated as "submitted earliest" instead of playerA -- inverting
+      // who gets the full 6 units vs the scarce leftover. Spend is used as a proxy for quantity
+      // bought (cash is credited to a fixed budget before each household's purchase is resolved).
+      const spent = (household: typeof householdA): number => 100 - household.ledger.cash;
+      expect(spent(householdA)).toBeCloseTo(6 * scarceListingPrice, 5);
+      expect(spent(householdB)).toBeLessThan(spent(householdA));
+      expect(spent(householdB)).toBeCloseTo((scarceListingInitialQuantity - 6) * scarceListingPrice, 5);
+    });
   });
 });

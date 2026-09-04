@@ -171,6 +171,85 @@ button.ghost {
   padding: 12px 0;
 }
 
+.info-badge {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #1e3a8a;
+}
+
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.priority-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.priority-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.priority-pick-item input[type="number"] {
+  width: 60px;
+}
+
+.listing-row .priority-select {
+  width: 130px;
+}
+
+.auto-fill-section {
+  border-top: 1px dashed #e2e8f0;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.auto-fill-section .hint {
+  color: #6b7280;
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
+
+.preview-box {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #334155;
+  margin: 10px 0;
+}
+
+.submit-hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 4px 0;
+}
+
 .auto-advance {
   text-align: center;
   padding: 40px 0;

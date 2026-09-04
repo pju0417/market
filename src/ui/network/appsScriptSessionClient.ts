@@ -10,18 +10,18 @@
  * 바꿔야 한다.
  */
 import type {
+  CategoryPurchaseRequest,
   CompanyDecisionInput,
   CreateSessionResult,
   FetchLike,
   JoinResult,
   PlayerSlot,
   PollResult,
-  PurchaseRequestLine,
   StoreDecisionInput,
 } from "./sessionClient.js";
 import { ApiError } from "./sessionClient.js";
 import type { ParticipantId } from "../../types/domain.js";
-import type { BusinessSetupChoices } from "../../multiplayer/GameSession.js";
+import type { BusinessSetupChoices, SubmissionTimeoutSettings } from "../../multiplayer/GameSession.js";
 
 function isEnvelope(value: unknown): value is { status: number; body: unknown } {
   return typeof value === "object" && value !== null && "status" in value && typeof (value as { status: unknown }).status === "number";
@@ -63,8 +63,20 @@ export class AppsScriptSessionClient {
     return parsed.body as T;
   }
 
-  createSession(studentCount: number, rngSeed?: number): Promise<CreateSessionResult> {
-    return this.postRequest<CreateSessionResult>("/api/sessions", undefined, { studentCount, rngSeed });
+  /** `timeoutSettings`는 선택적이다(구매 매칭 알고리즘 재설계 Stage 2) — `sessionClient.ts`의
+   * `createSession`과 동일한 계약. */
+  createSession(studentCount: number, rngSeed?: number, timeoutSettings?: SubmissionTimeoutSettings): Promise<CreateSessionResult> {
+    return this.postRequest<CreateSessionResult>("/api/sessions", undefined, {
+      studentCount,
+      rngSeed,
+      ...(timeoutSettings
+        ? {
+            submissionTimeoutEnabled: timeoutSettings.enabled,
+            submissionTimeoutMs: timeoutSettings.timeoutMs,
+            npcGraduatedEntryEnabled: timeoutSettings.npcGraduatedEntryEnabled,
+          }
+        : {}),
+    });
   }
 
   getSlots(sessionId: string): Promise<PlayerSlot[]> {
@@ -97,9 +109,9 @@ export class AppsScriptSessionClient {
     sessionId: string,
     token: string,
     householdId: ParticipantId,
-    lines: PurchaseRequestLine[],
+    requests: CategoryPurchaseRequest[],
   ): Promise<{ ok: true }> {
-    return this.postRequest(`/api/sessions/${sessionId}/submit/household`, token, { householdId, lines });
+    return this.postRequest(`/api/sessions/${sessionId}/submit/household`, token, { householdId, requests });
   }
 
   /** 교사 전용 수동 강제진행. `teacherToken`은 세션 생성 응답에서만 받을 수 있다 (D-029). */

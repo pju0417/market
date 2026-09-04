@@ -24,6 +24,7 @@ import {
 } from "../economy/config.js";
 import { estimateCategoryMargin, computeCategoryAverages } from "../economy/marketStats.js";
 import { countRemainingMarketEventRounds, type ActiveMarketEvent } from "../economy/marketEvents.js";
+import { allocateCategoryPurchase } from "../economy/purchaseMatching.js";
 import { rngRange, type Rng } from "../economy/rng.js";
 import { chargeDiscretionary } from "../economy/settlement.js";
 import type {
@@ -46,6 +47,9 @@ const BASE_STORE_PURCHASE_QUANTITY = 15;
 /** 가계 1회 소비가 쏠리지 않도록 하는 상한 (예산 관리, docs/GAME_RULES.md 1절). UI가 사람
  * 입력 폼에도 같은 상한을 보여줄 수 있도록 export한다 (src/economy/humanDecisions.ts). */
 export const MAX_HOUSEHOLD_PURCHASE_UNITS = 6;
+/** NPC 가계가 단일 소매 매물 하나에서 살 수 있는 최대 수량 (공급 쏠림 방지, 사람 구매에는
+ * 적용되지 않는 NPC 전용 제약 — docs/NPC_DESIGN.md). */
+const MAX_UNITS_PER_RETAIL_LISTING_NPC = 3;
 /** 가격 정규화 기준 배율 (생산단가 대비 "적당한 소매가"로 간주하는 배율). */
 const REFERENCE_PRICE_MULTIPLIER = 2.2;
 
@@ -244,27 +248,12 @@ export function decideStorePurchases(
   const targetQuantity = Math.floor(Math.max(0, targetStockLevel - store.inventoryQuantity));
   const sellingCategoryId = store.currentSellingCategoryId ?? store.specialtyCategoryId;
 
-  const candidates = eligibleListings
-    .filter((listing) => listing.categoryId === sellingCategoryId && listing.quantityAvailable > 0)
-    .map((listing) => ({
-      listing,
-      score: scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, preset.qualityWeight, rng),
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  const purchases: PurchaseLine[] = [];
-  let remainingCash = availableCash;
-  let remainingTarget = targetQuantity;
-
-  for (const { listing } of candidates) {
-    if (remainingTarget <= 0 || remainingCash <= 0) break;
-    const affordable = Math.floor(remainingCash / listing.price);
-    const quantity = Math.floor(Math.max(0, Math.min(remainingTarget, listing.quantityAvailable, affordable)));
-    if (quantity <= 0) continue;
-    purchases.push({ listingId: listing.id, quantity, unitPrice: listing.price });
-    remainingCash -= quantity * listing.price;
-    remainingTarget -= quantity;
-  }
+  const candidates = eligibleListings.filter(
+    (listing) => listing.categoryId === sellingCategoryId && listing.quantityAvailable > 0,
+  );
+  const purchases = allocateCategoryPurchase(candidates, targetQuantity, Infinity, availableCash, rng, (listing) =>
+    scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, preset.qualityWeight, rng),
+  );
 
   return { purchases };
 }
@@ -339,43 +328,38 @@ export function decideHouseholdPurchases(
   rng: Rng,
 ): HouseholdPurchaseDecision {
   const preset = HOUSEHOLD_STRATEGY_PRESETS[household.strategyId];
+  const qualityWeight = preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6);
 
+  // 단일 매물 쏠림 방지(MAX_UNITS_PER_RETAIL_LISTING_NPC)를 allocateCategoryPurchase의 그리디
+  // 채움 단계에서 그대로 강제하기 위해, 후보의 quantityAvailable을 이 상한으로 미리 클램핑한
+  // 사본을 만든다 — 실제 게임 상태(state.retailListings)는 건드리지 않는다.
   const candidates = eligibleListings
     .filter((listing) => listing.quantityAvailable > 0)
-    .map((listing) => {
+    .map((listing) => ({ ...listing, quantityAvailable: Math.min(listing.quantityAvailable, MAX_UNITS_PER_RETAIL_LISTING_NPC) }));
+
+  const purchases = allocateCategoryPurchase(
+    candidates,
+    MAX_HOUSEHOLD_PURCHASE_UNITS,
+    Infinity,
+    availableCash,
+    rng,
+    (listing) => {
       const priorityBonus = household.kind === "npc" ? essentialNpcPriorityBonus(listing.categoryId) : 0;
       const sellingStore = stores[listing.storeId];
       const mismatchPenalty =
         sellingStore !== undefined && sellingStore.specialtyCategoryId !== null
           ? specialtyMismatchPenalty(sellingStore.specialtyCategoryId, listing.categoryId)
           : 0;
-      return {
-        listing,
-        score: scoreListingForBuyer(
-          listing.price,
-          listing.quality,
-          listing.categoryId,
-          preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6),
-          rng,
-          priorityBonus - mismatchPenalty,
-        ),
-      };
-    })
-    .sort((a, b) => b.score - a.score);
-
-  const purchases: PurchaseLine[] = [];
-  let remainingCash = availableCash;
-  let remainingUnits = MAX_HOUSEHOLD_PURCHASE_UNITS;
-
-  for (const { listing } of candidates) {
-    if (remainingUnits <= 0 || remainingCash <= 0) break;
-    const affordable = Math.floor(remainingCash / listing.price);
-    const quantity = Math.max(0, Math.min(remainingUnits, listing.quantityAvailable, affordable, 3));
-    if (quantity <= 0) continue;
-    purchases.push({ listingId: listing.id, quantity, unitPrice: listing.price });
-    remainingCash -= quantity * listing.price;
-    remainingUnits -= quantity;
-  }
+      return scoreListingForBuyer(
+        listing.price,
+        listing.quality,
+        listing.categoryId,
+        qualityWeight,
+        rng,
+        priorityBonus - mismatchPenalty,
+      );
+    },
+  );
 
   return { purchases };
 }

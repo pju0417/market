@@ -18,6 +18,7 @@ import {
 } from "../economy/config.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
+import { computeCategoryClearingSummary } from "../economy/marketStats.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
 import {
@@ -26,12 +27,19 @@ import {
   resolveHouseholdPurchases,
   resolveStoreCategorySwitch,
   resolveStorePurchases,
+  type CategoryPurchaseRequest,
   type CompanyDecisionInput,
-  type PurchaseRequestLine,
+  type StorePurchaseRequest,
 } from "../economy/humanDecisions.js";
-import { decideCompanyIndustrySwitch, decideCompanyMarketEventSwitch, decideStoreSpecialtyDeviation } from "../npc/decisions.js";
+import {
+  decideCompanyIndustrySwitch,
+  decideCompanyMarketEventSwitch,
+  decideStorePurchases,
+  decideStoreSpecialtyDeviation,
+} from "../npc/decisions.js";
 import { planNpcBackfill } from "../npc/backfill.js";
 import type {
+  CategoryClearingSummary,
   CompanyState,
   GameState,
   HouseholdState,
@@ -40,6 +48,7 @@ import type {
   RetailListing,
   RoundMetrics,
   StoreState,
+  WholesaleListing,
 } from "../types/domain.js";
 import { PhaseHandlers, RoundEngine } from "./RoundEngine.js";
 
@@ -204,6 +213,9 @@ interface RoundAccumulator {
    *  state.retailListings 스냅샷. null이면 아직 이번 라운드에 계산 안 함 — runConsumerPurchases가
    *  라운드 내 처음 호출될 때 그 자리에서 한 번만 채운다. */
   roundStartRetailListings: RetailListing[] | null;
+  /** 구매 매칭 알고리즘 재설계 Stage 1: runStoreTurn 시작 시점의 state.wholesaleListings
+   *  스냅샷. roundStartRetailListings와 대칭 — wholesaleCategoryClearing 계산에 쓰인다. */
+  roundStartWholesaleListings: WholesaleListing[] | null;
 }
 
 function freshAccumulator(): RoundAccumulator {
@@ -227,6 +239,7 @@ function freshAccumulator(): RoundAccumulator {
     householdSpendByCategory: {},
     householdEssentialCategoriesMissed: {},
     roundStartRetailListings: null,
+    roundStartWholesaleListings: null,
   };
 }
 
@@ -237,7 +250,13 @@ function freshAccumulator(): RoundAccumulator {
  * (tests/simulation의 결정론 회귀 테스트, scripts/simulate-class.ts 출력 비교로 확인).
  */
 export interface StoreDecisionInput {
-  purchases: readonly PurchaseRequestLine[];
+  /**
+   * 구매 매칭 알고리즘 재설계(Stage 1) — 생략하면 이번 라운드 도매 매입 자체를 하지 않는다
+   * ("안 삼", 봇 위임이 아니다). 봇 위임 여부는 이 StoreDecisionInput 객체 자체(=이 가게의
+   * getStorePurchaseRequest 반환값)가 undefined인지로만 결정된다 — 사람이 실제로 제출했지만
+   * 이 필드만 비운 경우는 "이번 라운드는 안 사기로 선택"이다.
+   */
+  purchaseRequest?: StorePurchaseRequest;
   /** 사람이 직접 정한 소매 판매가 (docs/GAME_RULES.md 1절). 생략하면 기존 자동 계산을 쓴다. */
   retailPrice?: number;
   /**
@@ -249,10 +268,85 @@ export interface StoreDecisionInput {
   sellingCategoryId?: ProductCategoryId;
 }
 
+/**
+ * 제출 제한시간(선택적) + NPC 순차진입 설정 (구매 매칭 알고리즘 재설계 Stage 1). 이번 Stage는
+ * 교사가 UI로 이 값을 바꾸는 것까지는 다루지 않는다 — src/multiplayer/GameSession.ts가
+ * 하드코딩된 기본값(DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS)만 제공한다.
+ */
+export interface SubmissionTimeoutSettings {
+  enabled: boolean;
+  timeoutMs: number;
+  npcGraduatedEntryEnabled: boolean;
+}
+
+/**
+ * NPC 순차진입 윈도우가 시작되는 지점(phase 시작 후 timeoutMs에 대한 비율). v1 고정
+ * 잠정값 — 교사 설정 대상이 아니다(CLAUDE.md 4절 승인 절차 없이 조정하지 않는다).
+ */
+export const NPC_GRADUATED_ENTRY_START_RATIO = 0.5;
+
 export interface HumanDecisionSource {
   getCompanyInput(companyId: ParticipantId): CompanyDecisionInput | undefined;
   getStorePurchaseRequest(storeId: ParticipantId): StoreDecisionInput | undefined;
-  getHouseholdPurchaseRequest(householdId: ParticipantId): readonly PurchaseRequestLine[] | undefined;
+  getHouseholdPurchaseRequest(householdId: ParticipantId): readonly CategoryPurchaseRequest[] | undefined;
+  /** 이 참여자의 이번 phase 제출이 실제로 접수된 시각(ms). 제출이 없었으면 undefined. */
+  getStoreSubmissionReceivedAt(storeId: ParticipantId): number | undefined;
+  getHouseholdSubmissionReceivedAt(householdId: ParticipantId): number | undefined;
+  /** 현재 phase가 시작된 시각(ms) — NPC 순차진입 가상 시각 계산의 기준점. */
+  getPhaseStartedAt(): number;
+  getSubmissionTimeoutSettings(): SubmissionTimeoutSettings;
+}
+
+/**
+ * 가게/가계 턴의 참여자 처리 순서를 정한다 (구매 매칭 알고리즘 재설계 Stage 1). 실제 시장처럼
+ * "먼저 제출한 사람이 유리하다"는 원칙을 구현한다:
+ * - `decisionSource`가 아예 없으면(헤드리스 시뮬레이터 경로) 기존과 완전히 동일하게 순수
+ *   `shuffle`만 쓴다 — 이 분기는 반드시 무변경으로 유지해야 한다(회귀 게이트).
+ * - 사람 중 실제로 제출한 참여자는 제출 시각 오름차순으로 먼저 처리한다.
+ * - 제출하지 않은 나머지(주로 NPC, 또는 제출 안 한 사람)는 셔플한 뒤, "NPC 순차진입"이 꺼져
+ *   있으면(설정 자체가 꺼졌거나 `npcGraduatedEntryEnabled=false`) 셔플 순서 그대로 제출자
+ *   다음에 배치한다. 켜져 있으면 phase 시작 후 `timeoutMs * NPC_GRADUATED_ENTRY_START_RATIO`
+ *   시점부터 `timeoutMs`까지 균등하게 퍼진 "가상 제출 시각"을 부여해, 실제 제출 시각과 함께
+ *   전체를 다시 시각순으로 정렬한다(즉, 아주 늦게 제출한 사람보다 일찍 진입한 NPC가 앞설 수도
+ *   있다).
+ * - "제출 제한시간을 끔"(`enabled=false`)도 순서 개념 자체를 없애지 않는다 — 사람 실제 시각순
+ *   먼저 + NPC 셔플 순서 나중이라는 동일한 분기를 그대로 탄다(사용자 확정 사항).
+ */
+export function orderBuyersForTurn<Id extends ParticipantId>(
+  ids: readonly Id[],
+  rng: Rng,
+  decisionSource: HumanDecisionSource | undefined,
+  hasHumanSubmission: (id: Id) => boolean,
+  submissionReceivedAt: (id: Id) => number | undefined,
+): Id[] {
+  if (decisionSource === undefined) {
+    return shuffle(rng, ids);
+  }
+
+  const submitted: Id[] = [];
+  const rest: Id[] = [];
+  for (const id of ids) {
+    (hasHumanSubmission(id) ? submitted : rest).push(id);
+  }
+  const shuffledRest = shuffle(rng, rest);
+
+  const settings = decisionSource.getSubmissionTimeoutSettings();
+  const useGraduatedEntry = settings.enabled && settings.npcGraduatedEntryEnabled && shuffledRest.length > 0;
+
+  if (!useGraduatedEntry) {
+    submitted.sort((a, b) => (submissionReceivedAt(a) ?? Infinity) - (submissionReceivedAt(b) ?? Infinity));
+    return [...submitted, ...shuffledRest];
+  }
+
+  const phaseStartedAt = decisionSource.getPhaseStartedAt();
+  const windowStart = phaseStartedAt + settings.timeoutMs * NPC_GRADUATED_ENTRY_START_RATIO;
+  const windowDuration = settings.timeoutMs * (1 - NPC_GRADUATED_ENTRY_START_RATIO);
+  const virtualAt = new Map<Id, number>(
+    shuffledRest.map((id, index) => [id, windowStart + windowDuration * (index / shuffledRest.length)]),
+  );
+  const merged = [...submitted, ...shuffledRest];
+  merged.sort((a, b) => (submissionReceivedAt(a) ?? virtualAt.get(a)!) - (submissionReceivedAt(b) ?? virtualAt.get(b)!));
+  return merged;
 }
 
 /**
@@ -331,7 +425,17 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
   }
 
   function runStoreTurn(state: GameState): void {
-    const orderedStoreIds = shuffle(rng, Object.keys(state.stores));
+    if (acc.roundStartWholesaleListings === null) {
+      acc.roundStartWholesaleListings = state.wholesaleListings.map((l) => ({ ...l }));
+    }
+
+    const orderedStoreIds = orderBuyersForTurn(
+      Object.keys(state.stores),
+      rng,
+      decisionSource,
+      (id) => decisionSource?.getStorePurchaseRequest(id) !== undefined,
+      (id) => decisionSource?.getStoreSubmissionReceivedAt(id),
+    );
     for (const storeId of orderedStoreIds) {
       const store = state.stores[storeId]!;
       const district = DISTRICTS[store.districtId];
@@ -349,7 +453,14 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       }
 
       const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
-      const decision = resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested?.purchases, rng);
+      // 봇 위임 여부는 requested(=이 가게의 StoreDecisionInput) 자체가 undefined인지로만
+      // 판단한다 — requested가 있는데 purchaseRequest만 비어 있으면(사람이 실제로 제출했지만
+      // 이번 라운드는 안 사기로 함) resolveStorePurchases가 "안 삼"으로 처리하며, 봇으로
+      // 위임하지 않는다 (구매 매칭 알고리즘 재설계 Stage 1, 계약 정정).
+      const decision =
+        requested === undefined
+          ? decideStorePurchases(store, store.ledger.cash, eligible, rng)
+          : resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested.purchaseRequest, rng);
 
       let totalCost = 0;
       let totalQty = 0;
@@ -421,7 +532,13 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     }
     const roundStartListings = acc.roundStartRetailListings;
 
-    const orderedIds = shuffle(rng, householdIds);
+    const orderedIds = orderBuyersForTurn(
+      householdIds,
+      rng,
+      decisionSource,
+      (id) => decisionSource?.getHouseholdPurchaseRequest(id) !== undefined,
+      (id) => decisionSource?.getHouseholdSubmissionReceivedAt(id),
+    );
     for (const householdId of orderedIds) {
       const household = state.households[householdId]!;
       credit(household.ledger, household.budgetPerRound);
@@ -555,6 +672,20 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       householdEssentialCategoriesMissed[household.id] = acc.householdEssentialCategoriesMissed[household.id] ?? [];
     }
 
+    // 구매 매칭 알고리즘 재설계 Stage 1: 도매/소매 매물 스냅샷(라운드 시작 시점) 대 현재
+    // 상태를 카테고리별로 비교한 시세 청산 요약. 새 수요/가격 공식이 아니라 스냅샷 비교만
+    // 한다 (src/economy/marketStats.ts의 computeCategoryClearingSummary).
+    const wholesaleBefore = acc.roundStartWholesaleListings ?? [];
+    const retailBefore = acc.roundStartRetailListings ?? [];
+    const wholesaleCategoryClearing: Partial<Record<ProductCategoryId, CategoryClearingSummary>> = {};
+    const retailCategoryClearing: Partial<Record<ProductCategoryId, CategoryClearingSummary>> = {};
+    for (const categoryId of PRODUCT_CATEGORIES) {
+      const wholesaleSummary = computeCategoryClearingSummary(wholesaleBefore, state.wholesaleListings, categoryId);
+      if (wholesaleSummary !== undefined) wholesaleCategoryClearing[categoryId] = wholesaleSummary;
+      const retailSummary = computeCategoryClearingSummary(retailBefore, state.retailListings, categoryId);
+      if (retailSummary !== undefined) retailCategoryClearing[categoryId] = retailSummary;
+    }
+
     const metrics: RoundMetrics = {
       round: state.currentRound,
       companyProfit,
@@ -580,6 +711,8 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       householdCategoryCount,
       householdTopCategorySpendShare,
       householdEssentialCategoriesMissed,
+      wholesaleCategoryClearing,
+      retailCategoryClearing,
     };
     state.roundMetrics.push(metrics);
   }

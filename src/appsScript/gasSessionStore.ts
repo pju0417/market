@@ -10,7 +10,7 @@
  * 계층)의 책임이다 — `saveSession`을 호출하지 않으면 이번 요청에서 일어난 변화(제출값,
  * phase 진행, 로비 상태)는 전부 사라진다.
  */
-import { GameSession, type PendingSubmissionsSnapshot } from "../multiplayer/GameSession.js";
+import { GameSession, type PendingSubmissionsSnapshot, type SubmissionTimeoutSettings } from "../multiplayer/GameSession.js";
 import type { SpreadsheetGateway, UuidGenerator } from "./hostInterfaces.js";
 import {
   buildRoundSummaryRows,
@@ -29,6 +29,22 @@ import type { ParticipantId, RoundPhase } from "../types/domain.js";
 /** 로비(창업 준비) 타임아웃. 로컬 서버(D-030, `DEFAULT_LOBBY_TIMEOUT_MS`)와 같은 값이지만,
  * `src/appsScript`는 `src/server`에 의존하지 않는다는 원칙(D-032)에 따라 독립적으로 둔다. */
 export const DEFAULT_LOBBY_TIMEOUT_MS = 180_000;
+
+/**
+ * 교사가 세션 생성 시 제출 제한시간 설정을 아예 넘기지 않았을 때 쓰는 기본값 (구매 매칭
+ * 알고리즘 재설계 Stage 2). `src/server/timeoutConfig.ts`의
+ * `DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS`와 값은 같지만, `src/appsScript`는
+ * `src/server`에 의존하지 않는다는 원칙(D-032)에 따라 독립적으로 둔다 — 다인원 Apps Script
+ * 세션도 로컬 서버와 동일하게 기본적으로 제출 제한시간을 켠 채(enabled=true) 시작해야
+ * D-029가 이미 확정한 동작과 하위호환된다. `GameSession.DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS`
+ * (로컬 1인 플레이 기본값, enabled=false)와 혼동하지 마라 — Apps Script는 항상 다인원
+ * 세션이다.
+ */
+export const DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS: SubmissionTimeoutSettings = {
+  enabled: true,
+  timeoutMs: 120_000,
+  npcGraduatedEntryEnabled: true,
+};
 
 export interface SessionEntry {
   session: GameSession;
@@ -73,16 +89,33 @@ function readRoundMetricsForSession(gateway: SpreadsheetGateway, sessionId: stri
     .sort((a, b) => a.round - b.round);
 }
 
-/** 새 세션을 만든다. 시트에는 아직 아무것도 쓰지 않는다 — 호출자가 `saveSession`으로 처음
- * 저장해야 한다(다른 모든 변경과 동일한 hydrate→로직→flush 패턴을 유지하기 위함). */
+/**
+ * 새 세션을 만든다. 시트에는 아직 아무것도 쓰지 않는다 — 호출자가 `saveSession`으로 처음
+ * 저장해야 한다(다른 모든 변경과 동일한 hydrate→로직→flush 패턴을 유지하기 위함).
+ *
+ * `timeoutSettings`를 생략하면 `DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS`를 쓴다(구매 매칭
+ * 알고리즘 재설계 Stage 2, code-reviewer가 지적한 "Apps Script 경로가 timeoutSettings를
+ * 조용히 무시한다" critical 버그 수정). 이 값은 `entry.session`(실제 `GameSession` 인스턴스)
+ * 안에만 저장되고 `SessionEntry`에 별도 필드로 중복 보관하지 않는다 — `saveSession`이
+ * `entry.session.getSubmissionTimeoutSettings()`를 그대로 읽어 시트에 쓰므로 값이 어긋날
+ * 여지가 없다.
+ */
 export function createSession(
   gateway: SpreadsheetGateway,
   uuidGen: UuidGenerator,
   studentCount: number,
   rngSeed?: number,
+  timeoutSettings?: SubmissionTimeoutSettings,
 ): { sessionId: string; entry: SessionEntry } {
   const sessionId = uuidGen();
-  const session = new GameSession(rngSeed ?? Date.now(), undefined, undefined, studentCount);
+  const session = new GameSession(
+    rngSeed ?? Date.now(),
+    undefined,
+    undefined,
+    studentCount,
+    undefined,
+    timeoutSettings ?? DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS,
+  );
   const entry: SessionEntry = {
     session,
     teacherToken: uuidGen(),
@@ -116,7 +149,18 @@ export function getSession(gateway: SpreadsheetGateway, sessionId: string): Sess
     ? (JSON.parse(pendingRow.json!) as PendingSubmissionsSnapshot)
     : undefined;
 
-  const session = GameSession.resumeFromState(state, pending);
+  // submissionTimeoutEnabled 컬럼이 아예 없으면(이 필드가 생기기 전에 만들어진 세션 행)
+  // DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS로 안전하게 폴백한다.
+  const timeoutSettings: SubmissionTimeoutSettings =
+    sessionRow.submissionTimeoutEnabled === undefined
+      ? DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS
+      : {
+          enabled: deserializeBool(sessionRow.submissionTimeoutEnabled),
+          timeoutMs: Number(sessionRow.submissionTimeoutMs),
+          npcGraduatedEntryEnabled: deserializeBool(sessionRow.npcGraduatedEntryEnabled),
+        };
+
+  const session = GameSession.resumeFromState(state, pending, timeoutSettings);
 
   return {
     session,
@@ -170,6 +214,7 @@ export function saveSession(gateway: SpreadsheetGateway, sessionId: string, entr
     json: JSON.stringify(entry.session.exportPendingSubmissions()),
   });
 
+  const timeoutSettings = entry.session.getSubmissionTimeoutSettings();
   gateway.upsertRow(SESSIONS_SHEET, "sessionId", sessionId, {
     sessionId,
     teacherToken: entry.teacherToken,
@@ -179,6 +224,9 @@ export function saveSession(gateway: SpreadsheetGateway, sessionId: string, entr
     lobbyStartedAt: String(entry.lobbyStartedAt),
     lobbyClosedByTeacher: serializeBool(entry.lobbyClosedByTeacher),
     lobbyTimerConsumed: serializeBool(entry.lobbyTimerConsumed),
+    submissionTimeoutEnabled: serializeBool(timeoutSettings.enabled),
+    submissionTimeoutMs: String(timeoutSettings.timeoutMs),
+    npcGraduatedEntryEnabled: serializeBool(timeoutSettings.npcGraduatedEntryEnabled),
   });
 }
 

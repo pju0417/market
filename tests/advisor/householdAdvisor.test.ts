@@ -67,6 +67,8 @@ function emptyMetricsShape(
     storeRevenue: {},
     storeSupplierCount: {},
     storeTopSupplierSpendShare: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
   };
 }
 

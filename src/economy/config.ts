@@ -60,6 +60,13 @@ export function specialtyMismatchPenalty(specialty: ProductCategoryId, sold: Pro
 }
 
 /**
+ * 사람의 자동배분(안전망) "품질 우선" 모드에서 쓰는 가격 대비 품질 가중치
+ * (구매 매칭 알고리즘 재설계 Stage 1). scoreListingForBuyer의 qualityWeight 인자에 그대로
+ * 전달된다. v1 잠정값 — 밸런스 조정은 CLAUDE.md 4절 승인 절차를 따른다.
+ */
+export const HUMAN_AUTO_FILL_QUALITY_WEIGHT = 0.5;
+
+/**
  * 업종 전환/전문 이탈 판매가 실제로 활성화되는 라운드 (Milestone 6, docs/DECISIONS.md D-033).
  * 3라운드까지는 창업 시 정한 업종/전문성을 그대로 유지해야 한다는 커리큘럼 의도(docs/ROUND_FLOW.md)
  * 를 코드에서 강제하는 하드 게이트다.

@@ -10,9 +10,36 @@
  */
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
+import type { PriorityPurchasePick, StorePurchaseRequest, CategoryPurchaseRequest } from "../../src/economy/humanDecisions.js";
 import { RoundEngine } from "../../src/engine/RoundEngine.js";
-import { buildInitialGameState, createPhaseHandlers, type HumanDecisionSource } from "../../src/engine/simulateGame.js";
-import type { RetailListing } from "../../src/types/domain.js";
+import { buildInitialGameState, createPhaseHandlers, type HumanDecisionSource, type StoreDecisionInput } from "../../src/engine/simulateGame.js";
+import type { ProductCategoryId, RetailListing } from "../../src/types/domain.js";
+
+/** 구매 매칭 알고리즘 재설계 Stage 1: 제출 시각/제한시간 관련 메서드는 이 테스트 파일의
+ * 관심사가 아니므로(orderBuyersForTurn 자체는 tests/engine/orderBuyersForTurn.test.ts에서
+ * 별도 검증) 항상 같은 무의미한 값으로 채운다. */
+const HUMAN_DECISION_TIMING_STUB = {
+  getStoreSubmissionReceivedAt: () => undefined,
+  getHouseholdSubmissionReceivedAt: () => undefined,
+  getPhaseStartedAt: () => 0,
+  getSubmissionTimeoutSettings: () => ({ enabled: false, timeoutMs: 120_000, npcGraduatedEntryEnabled: true }),
+};
+
+/** priorityPicks만으로 maxQuantity를 자동 계산하는 StoreDecisionInput 헬퍼(1~3순위로 전부
+ * 충족되는 단순 시나리오 전용 — 자동배분 동작을 테스트하려는 게 아니라 기존 시나리오를 새
+ * 스키마로 옮기는 것이 목적이다). */
+function storeBuys(picks: readonly PriorityPurchasePick[]): StoreDecisionInput {
+  const purchaseRequest: StorePurchaseRequest = {
+    priorityPicks: [...picks],
+    maxQuantity: picks.reduce((sum, p) => sum + p.quantity, 0),
+  };
+  return { purchaseRequest };
+}
+
+/** 위와 동일한 목적의 가계용 헬퍼 — 카테고리 하나짜리 요청 배열을 만든다. */
+function householdBuys(categoryId: ProductCategoryId, picks: readonly PriorityPurchasePick[]): CategoryPurchaseRequest[] {
+  return [{ categoryId, priorityPicks: [...picks], maxQuantity: picks.reduce((sum, p) => sum + p.quantity, 0) }];
+}
 
 describe("simulateGame RoundMetrics instrumentation", () => {
   it("distinguishes unitsProduced from unitsSoldWholesale across a carryover round, and matches store-side purchase metrics exactly", async () => {
@@ -33,6 +60,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
 
     let round = 1;
     const decisionSource: HumanDecisionSource = {
+      ...HUMAN_DECISION_TIMING_STUB,
       getCompanyInput: (id) => {
         if (id !== companyId) return undefined;
         if (round === 1) return { quantity: 10, quality: 0.8, wholesalePrice: 5 };
@@ -42,9 +70,9 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       getStorePurchaseRequest: (id) => {
         if (id !== storeId) return undefined;
         // round 1: 10개 생산 중 6개만 매입 -> 4개 재고 이월.
-        if (round === 1) return { purchases: [{ listingId: `wl-r1-${companyId}`, quantity: 6 }] };
+        if (round === 1) return storeBuys([{ listingId: `wl-r1-${companyId}`, quantity: 6 }]);
         // round 2: 이번 라운드 생산은 5개뿐이지만, 이월 재고(4개)까지 합쳐 9개를 전부 매입.
-        if (round === 2) return { purchases: [{ listingId: `wl-r2-${companyId}`, quantity: 9 }] };
+        if (round === 2) return storeBuys([{ listingId: `wl-r2-${companyId}`, quantity: 9 }]);
         return undefined;
       },
       getHouseholdPurchaseRequest: () => undefined,
@@ -152,6 +180,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       const { state, companyAId, companyBId, targetStoreId } = isolatedThreeStudentState(31001);
 
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: (id) => {
           if (id === companyAId) return { quantity: 20, quality: 0.8, wholesalePrice: 5 };
           if (id === companyBId) return { quantity: 20, quality: 0.7, wholesalePrice: 4 };
@@ -159,12 +188,10 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         },
         getStorePurchaseRequest: (id) => {
           if (id !== targetStoreId) return undefined;
-          return {
-            purchases: [
-              { listingId: `wl-r1-${companyAId}`, quantity: 6 },
-              { listingId: `wl-r1-${companyBId}`, quantity: 4 },
-            ],
-          };
+          return storeBuys([
+            { listingId: `wl-r1-${companyAId}`, quantity: 6 },
+            { listingId: `wl-r1-${companyBId}`, quantity: 4 },
+          ]);
         },
         getHouseholdPurchaseRequest: () => undefined,
       };
@@ -185,6 +212,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       const { state, companyAId, companyBId, targetStoreId } = isolatedThreeStudentState(31003);
 
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: (id) => {
           if (id === companyAId) return { quantity: 20, quality: 0.8, wholesalePrice: 5 };
           if (id === companyBId) return { quantity: 20, quality: 0.7, wholesalePrice: 4 };
@@ -192,7 +220,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         },
         getStorePurchaseRequest: (id) => {
           if (id !== targetStoreId) return undefined;
-          return { purchases: [{ listingId: `wl-r1-${companyAId}`, quantity: 6 }] };
+          return storeBuys([{ listingId: `wl-r1-${companyAId}`, quantity: 6 }]);
         },
         getHouseholdPurchaseRequest: () => undefined,
       };
@@ -212,6 +240,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       const { state, companyAId, companyBId, targetStoreId } = isolatedThreeStudentState(31005);
 
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: (id) => {
           if (id === companyAId) return { quantity: 20, quality: 0.8, wholesalePrice: 5 };
           if (id === companyBId) return { quantity: 20, quality: 0.7, wholesalePrice: 4 };
@@ -219,7 +248,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         },
         getStorePurchaseRequest: (id) => {
           if (id !== targetStoreId) return undefined;
-          return { purchases: [] };
+          return {};
         },
         getHouseholdPurchaseRequest: () => undefined,
       };
@@ -267,10 +296,11 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         listing("rl-toys", sellerStoreId, "toys", { price: 5, quality: 1.0 }),
       ];
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: () => undefined,
         getStorePurchaseRequest: () => undefined,
         getHouseholdPurchaseRequest: (id) =>
-          id === householdId ? [{ listingId: "rl-toys", quantity: 1 }] : undefined,
+          id === householdId ? householdBuys("toys", [{ listingId: "rl-toys", quantity: 1 }]) : undefined,
       };
 
       const rng = createRng(41002);
@@ -299,10 +329,11 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         listing("rl-toys", sellerStoreId, "toys", { price: 5, quality: 1.0 }),
       ];
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: () => undefined,
         getStorePurchaseRequest: () => undefined,
         getHouseholdPurchaseRequest: (id) =>
-          id === householdId ? [{ listingId: "rl-toys", quantity: 1 }] : undefined,
+          id === householdId ? householdBuys("toys", [{ listingId: "rl-toys", quantity: 1 }]) : undefined,
       };
 
       const rng = createRng(41004);
@@ -322,10 +353,11 @@ describe("simulateGame RoundMetrics instrumentation", () => {
       const { state, householdId, sellerStoreId } = setup(41005);
       state.retailListings = [listing("rl-toys", sellerStoreId, "toys", { price: 5, quality: 1.0 })];
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: () => undefined,
         getStorePurchaseRequest: () => undefined,
         getHouseholdPurchaseRequest: (id) =>
-          id === householdId ? [{ listingId: "rl-toys", quantity: 1 }] : undefined,
+          id === householdId ? householdBuys("toys", [{ listingId: "rl-toys", quantity: 1 }]) : undefined,
       };
 
       const rng = createRng(41006);
@@ -347,10 +379,11 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         listing("rl-toys", sellerStoreId, "toys", { price: 5, quality: 1.0 }),
       ];
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: () => undefined,
         getStorePurchaseRequest: () => undefined,
         getHouseholdPurchaseRequest: (id) =>
-          id === householdId ? [{ listingId: "rl-toys", quantity: 1 }] : undefined,
+          id === householdId ? householdBuys("toys", [{ listingId: "rl-toys", quantity: 1 }]) : undefined,
       };
 
       const rng = createRng(41008);
@@ -370,13 +403,14 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         listing("rl-toys", sellerStoreId, "toys", { price: 2, quality: 0.5 }),
       ];
       const decisionSource: HumanDecisionSource = {
+        ...HUMAN_DECISION_TIMING_STUB,
         getCompanyInput: () => undefined,
         getStorePurchaseRequest: () => undefined,
         getHouseholdPurchaseRequest: (id) =>
           id === householdId
             ? [
-                { listingId: "rl-food", quantity: 2 }, // 2 * 5 = 10
-                { listingId: "rl-apparel", quantity: 1 }, // 1 * 3 = 3
+                ...householdBuys("food", [{ listingId: "rl-food", quantity: 2 }]), // 2 * 5 = 10
+                ...householdBuys("apparel", [{ listingId: "rl-apparel", quantity: 1 }]), // 1 * 3 = 3
               ]
             : undefined,
       };
@@ -411,6 +445,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
         ];
 
         const decisionSource: HumanDecisionSource = {
+          ...HUMAN_DECISION_TIMING_STUB,
           getCompanyInput: () => undefined,
           getStorePurchaseRequest: () => undefined,
           // student-1's household buys the single food unit during "household-turn" (processed
@@ -418,7 +453,7 @@ describe("simulateGame RoundMetrics instrumentation", () => {
           // and every NPC household including npcHouseholdId) explicitly requests nothing, so the
           // scenario is fully deterministic regardless of shuffle order.
           getHouseholdPurchaseRequest: (id) =>
-            id === student1HouseholdId ? [{ listingId: "rl-scarce-food", quantity: 1 }] : [],
+            id === student1HouseholdId ? householdBuys("food", [{ listingId: "rl-scarce-food", quantity: 1 }]) : [],
         };
 
         const rng = createRng(51002);

@@ -35,6 +35,8 @@ function makeRoundMetrics(round: number, overrides: Partial<RoundMetrics> = {}):
     householdCategoryCount: {},
     householdTopCategorySpendShare: {},
     householdEssentialCategoriesMissed: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
     ...overrides,
   };
 }
@@ -43,6 +45,10 @@ const noopDecisionSource: HumanDecisionSource = {
   getCompanyInput: () => undefined,
   getStorePurchaseRequest: () => undefined,
   getHouseholdPurchaseRequest: () => undefined,
+  getStoreSubmissionReceivedAt: () => undefined,
+  getHouseholdSubmissionReceivedAt: () => undefined,
+  getPhaseStartedAt: () => 0,
+  getSubmissionTimeoutSettings: () => ({ enabled: false, timeoutMs: 120_000, npcGraduatedEntryEnabled: true }),
 };
 
 describe("runCompanyTurn: human-submitted industry switch (Milestone 6, D-033)", () => {
@@ -153,7 +159,7 @@ describe("runStoreTurn: human-submitted selling-category switch (Milestone 6, D-
 
     const decisionSource: HumanDecisionSource = {
       ...noopDecisionSource,
-      getStorePurchaseRequest: (id) => (id === storeId ? { purchases: [], sellingCategoryId: "toys" } : undefined),
+      getStorePurchaseRequest: (id) => (id === storeId ? { sellingCategoryId: "toys" } : undefined),
     };
     const handlers = createPhaseHandlers(() => 0.5, decisionSource);
     await handlers["store-turn"]!(state);
@@ -173,7 +179,7 @@ describe("runStoreTurn: human-submitted selling-category switch (Milestone 6, D-
 
     const decisionSource: HumanDecisionSource = {
       ...noopDecisionSource,
-      getStorePurchaseRequest: (id) => (id === storeId ? { purchases: [], sellingCategoryId: "toys" } : undefined),
+      getStorePurchaseRequest: (id) => (id === storeId ? { sellingCategoryId: "toys" } : undefined),
     };
     const handlers = createPhaseHandlers(() => 0.5, decisionSource);
     await handlers["store-turn"]!(state);
@@ -194,7 +200,7 @@ describe("runStoreTurn: human-submitted selling-category switch (Milestone 6, D-
 
     const decisionSource: HumanDecisionSource = {
       ...noopDecisionSource,
-      getStorePurchaseRequest: (id) => (id === storeId ? { purchases: [], sellingCategoryId: "electronics" } : undefined),
+      getStorePurchaseRequest: (id) => (id === storeId ? { sellingCategoryId: "electronics" } : undefined),
     };
     const handlers = createPhaseHandlers(() => 0.5, decisionSource);
     await handlers["store-turn"]!(state);
@@ -224,7 +230,7 @@ describe("runStoreTurn: human-submitted selling-category switch (Milestone 6, D-
       ...noopDecisionSource,
       // Real submission (explicit empty purchase list), but no sellingCategoryId — must be
       // treated as "chose not to switch".
-      getStorePurchaseRequest: (id) => (id === storeId ? { purchases: [] } : undefined),
+      getStorePurchaseRequest: (id) => (id === storeId ? {} : undefined),
     };
     const handlers = createPhaseHandlers(() => 0, decisionSource);
     await handlers["store-turn"]!(state);

@@ -1,16 +1,17 @@
 import { useMemo, useState } from "react";
 import { analyzeStoreTurn } from "../../advisor/storeAdvisor.js";
 import { MIN_ROUND_FOR_INDUSTRY_ACTIONS, NPC_STORE_SPECIALTY_DEVIATION_RULES, PRODUCT_CATEGORIES } from "../../economy/config.js";
+import type { AutoFillPreference, PriorityPurchasePick, StorePurchaseRequest } from "../../economy/humanDecisions.js";
 import { eligibleWholesaleListingsForStore } from "../../economy/market.js";
+import { createRng } from "../../economy/rng.js";
 import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { CompanyState, GameState, ParticipantId, ProductCategoryId, StoreState } from "../../types/domain.js";
 import { CATEGORY_LABELS, DISTRICT_LABELS, formatWon } from "../labels.js";
 import {
   computeAvailableCash,
   computeStoreFixedCost,
-  computeTotalCost,
   filterEligibleWholesaleListings,
-  isOverBudget,
+  previewCategoryPurchase,
 } from "../turnCalculations.js";
 import { AdvisorPanel } from "./AdvisorPanel.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
@@ -25,7 +26,14 @@ interface Props {
   disabled?: boolean;
 }
 
-/** 가게 턴: 도매시장에서 상품을 비교해 매입하고(D-004), 소매 판매가격을 정한다. */
+/**
+ * 가게 턴: 도매시장에서 상품을 비교해 매입하고(D-004), 소매 판매가격을 정한다.
+ *
+ * 구매 매칭 개편(D-036) — 매물별로 낱개 수량을 미리 정하던 방식 대신, "1~3순위 수동 지정 +
+ * 부족분 자동배분"으로 결정한다. 자동배분 미리보기는 서버가 실제로 쓰는
+ * `resolveSingleCategoryPurchase`를 그대로 재사용한다(previewCategoryPurchase, D-033류
+ * 화면-서버 불일치 재발 방지).
+ */
 export function StoreTurnScreen({ session, state, version, store, companies, onSubmitted, disabled = false }: Props) {
   const fixedCost = computeStoreFixedCost(store.districtId);
   const availableCash = computeAvailableCash(store.ledger.cash, fixedCost);
@@ -36,7 +44,11 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
     store.lastSellingCategoryChangeRound !== null &&
     state.currentRound - store.lastSellingCategoryChangeRound < NPC_STORE_SPECIALTY_DEVIATION_RULES.cooldownRounds;
 
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [priorityPicks, setPriorityPicks] = useState<PriorityPurchasePick[]>([]);
+  const [pendingPickQty, setPendingPickQty] = useState<Record<string, number>>({});
+  const [maxQuantity, setMaxQuantity] = useState(0);
+  const [maxUnitPriceInput, setMaxUnitPriceInput] = useState("");
+  const [autoFillPreference, setAutoFillPreference] = useState<AutoFillPreference>("price");
   const [retailPrice, setRetailPrice] = useState(store.retailPrice > 0 ? store.retailPrice : 0);
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>(undefined);
@@ -55,10 +67,36 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
     [version, store.id, effectiveSellingCategoryId],
   );
 
-  const totalCost = computeTotalCost(eligible, quantities);
-  const overBudget = isOverBudget(totalCost, availableCash);
+  const rng = useMemo(() => createRng(1), []);
+  const maxUnitPrice = maxUnitPriceInput.trim() === "" ? undefined : Math.max(0, Number(maxUnitPriceInput));
+  const purchaseRequest: StorePurchaseRequest = {
+    priorityPicks,
+    maxQuantity,
+    autoFillPreference,
+    ...(maxUnitPrice !== undefined ? { maxUnitPrice } : {}),
+  };
+  const preview = useMemo(
+    () => previewCategoryPurchase(eligible, companies, store.ownerId, purchaseRequest, availableCash, maxQuantity, rng),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- purchaseRequest는 매 렌더 새 객체이므로, 실제로 미리보기에 영향을 주는 원시값만 의존성으로 넣는다.
+    [eligible, companies, store.ownerId, availableCash, maxQuantity, maxUnitPriceInput, autoFillPreference, priorityPicks, rng],
+  );
+
+  const priorityListingIds = new Set(priorityPicks.map((p) => p.listingId));
+  const priorityResults = preview.purchases.filter((p) => priorityListingIds.has(p.listingId));
+  const autoResults = preview.purchases.filter((p) => !priorityListingIds.has(p.listingId));
+
   // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
   const advice = useMemo(() => analyzeStoreTurn(state, store.id), [version, store.id]);
+
+  function addPriorityPick(listingId: string) {
+    if (priorityPicks.length >= 3) return;
+    const quantity = Math.max(1, pendingPickQty[listingId] ?? 1);
+    setPriorityPicks((prev) => [...prev, { listingId, quantity }]);
+  }
+
+  function removePriorityPick(listingId: string) {
+    setPriorityPicks((prev) => prev.filter((p) => p.listingId !== listingId));
+  }
 
   return (
     <>
@@ -126,30 +164,95 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
       )}
 
       <h3>도매시장 매물</h3>
+      {priorityPicks.length > 0 && (
+        <div className="priority-pick-list">
+          {priorityPicks.map((pick, index) => {
+            const listing = eligible.find((l) => l.id === pick.listingId);
+            return (
+              <div className="priority-pick-item" key={pick.listingId}>
+                <span className="priority-badge">{index + 1}</span>
+                <span style={{ flex: 1 }}>
+                  {listing ? `${formatWon(listing.price)}/개 · 품질 ${(listing.quality * 100).toFixed(0)}점` : "매물 없음"}
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={pick.quantity}
+                  onChange={(e) => {
+                    const quantity = Math.max(1, Number(e.target.value));
+                    setPriorityPicks((prev) => prev.map((p) => (p.listingId === pick.listingId ? { ...p, quantity } : p)));
+                  }}
+                />
+                <button className="ghost" onClick={() => removePriorityPick(pick.listingId)}>
+                  빼기
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {eligible.length === 0 && <p className="empty-note">지금 살 수 있는 물건이 없어요.</p>}
-      {eligible.map((listing) => (
-        <div className="listing-row" key={listing.id}>
-          <div className="listing-info">
-            {formatWon(listing.price)} / 개 · 품질 {(listing.quality * 100).toFixed(0)}점 · 최대{" "}
-            {Math.floor(listing.quantityAvailable)}개
+      {eligible
+        .filter((listing) => !priorityListingIds.has(listing.id))
+        .map((listing) => (
+          <div className="listing-row" key={listing.id}>
+            <div className="listing-info">
+              {formatWon(listing.price)} / 개 · 품질 {(listing.quality * 100).toFixed(0)}점 · 최대{" "}
+              {Math.floor(listing.quantityAvailable)}개
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={listing.quantityAvailable}
+              value={pendingPickQty[listing.id] ?? 1}
+              onChange={(e) => setPendingPickQty((prev) => ({ ...prev, [listing.id]: Math.max(1, Number(e.target.value)) }))}
+            />
+            <button className="secondary" disabled={priorityPicks.length >= 3} onClick={() => addPriorityPick(listing.id)}>
+              {priorityPicks.length + 1}순위로 담기
+            </button>
           </div>
+        ))}
+      {priorityPicks.length >= 3 && <p className="submit-hint">이미 3개를 골랐어요, 먼저 하나를 빼야 담을 수 있어요.</p>}
+
+      <div className="auto-fill-section">
+        <span className="field-label">그래도 부족하면</span>
+        <p className="hint">1~3순위 밖에서 부족한 만큼 채울 때, 어떤 걸 먼저 볼지 골라요.</p>
+        <label className="field">
+          <span className="field-label">이 카테고리에서 이번 라운드 사고 싶은 총 수량</span>
+          <input type="number" min={0} value={maxQuantity} onChange={(e) => setMaxQuantity(Math.max(0, Number(e.target.value)))} />
+        </label>
+        <label className="field">
+          <span className="field-label">자동배분에만 적용되는 최대 단가 (비워두면 얼마든지 사드려요)</span>
           <input
             type="number"
             min={0}
-            max={listing.quantityAvailable}
-            value={quantities[listing.id] ?? 0}
-            onChange={(e) =>
-              setQuantities((prev) => ({ ...prev, [listing.id]: Math.max(0, Number(e.target.value)) }))
-            }
+            value={maxUnitPriceInput}
+            onChange={(e) => setMaxUnitPriceInput(e.target.value)}
+            placeholder="무제한"
           />
-        </div>
-      ))}
-
-      <div className="stat-row">
-        <span className="label">이번 매입에 드는 돈</span>
-        <span className="value">{formatWon(totalCost)}</span>
+        </label>
+        <label className="field">
+          <span className="field-label">자동배분 기준</span>
+          <select value={autoFillPreference} onChange={(e) => setAutoFillPreference(e.target.value as AutoFillPreference)}>
+            <option value="price">가격이 쌀수록 좋아요 (기본)</option>
+            <option value="quality">품질이 좋을수록 좋아요</option>
+          </select>
+        </label>
       </div>
-      {overBudget && <p style={{ color: "#dc2626", fontSize: 14 }}>매입 수량을 줄여야 해요.</p>}
+
+      <div className="preview-box">
+        {priorityResults.map((p, i) => (
+          <div key={p.listingId}>
+            {i + 1}순위: {p.quantity}개 ({formatWon(p.quantity * p.unitPrice)})
+          </div>
+        ))}
+        {autoResults.length > 0 && (
+          <div>자동배분: {autoResults.map((p) => `${p.quantity}개(${formatWon(p.quantity * p.unitPrice)})`).join(" + ")}</div>
+        )}
+        <div>
+          합계 {preview.spentUnits}개, {formatWon(preview.spentCash)}
+        </div>
+      </div>
 
       <label className="field">
         <span className="field-label">소매 판매가격 (개당)</span>
@@ -162,17 +265,17 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
         />
       </label>
 
+      <p className="submit-hint">먼저 결정을 제출할수록 원하는 물건을 먼저 살 수 있어요.</p>
+      <p className="submit-hint">급하게 제출하면 실수로 잘못된 값을 낼 수 있어요 — 제출 전 한 번 더 확인하세요.</p>
+
       <button
         className="primary"
-        disabled={disabled || overBudget}
+        disabled={disabled}
         onClick={() => {
-          const purchases = eligible
-            .map((listing) => ({ listingId: listing.id, quantity: quantities[listing.id] ?? 0 }))
-            .filter((line) => line.quantity > 0);
           setSubmitError(undefined);
           const input = willSwitchCategory
-            ? { purchases, retailPrice, sellingCategoryId: pendingSellingCategoryId as ProductCategoryId }
-            : { purchases, retailPrice };
+            ? { purchaseRequest, retailPrice, sellingCategoryId: pendingSellingCategoryId as ProductCategoryId }
+            : { purchaseRequest, retailPrice };
           Promise.resolve(session.submitStoreDecision(store.id, input))
             .then(() => onSubmitted())
             .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));

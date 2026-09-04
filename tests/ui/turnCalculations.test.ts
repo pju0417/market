@@ -1,20 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as humanDecisions from "../../src/economy/humanDecisions.js";
 import {
   computeAvailableCash,
   computeCompanyFixedCost,
   computeHouseholdTotalBudget,
   computeMaxAffordable,
-  computeMaxPurchaseQuantity,
   computeProductionCost,
   computeStoreFixedCost,
-  computeTotalCost,
   filterEligibleRetailListings,
   filterEligibleWholesaleListings,
   isOverBudget,
-  sumQuantities,
+  previewCategoryPurchase,
 } from "../../src/ui/turnCalculations.js";
 import { COSTS, DISTRICTS } from "../../src/economy/config.js";
-import type { RetailListing, WholesaleListing } from "../../src/types/domain.js";
+import { createRng } from "../../src/economy/rng.js";
+import type { CompanyState, RetailListing, WholesaleListing } from "../../src/types/domain.js";
 
 describe("turnCalculations", () => {
   describe("computeCompanyFixedCost / computeStoreFixedCost", () => {
@@ -77,25 +77,6 @@ describe("turnCalculations", () => {
     });
   });
 
-  describe("computeTotalCost", () => {
-    const listings = [
-      { id: "a", price: 10 },
-      { id: "b", price: 20 },
-    ];
-
-    it("sums price * quantity across listings", () => {
-      expect(computeTotalCost(listings, { a: 2, b: 1 })).toBe(40);
-    });
-
-    it("treats missing quantities as 0", () => {
-      expect(computeTotalCost(listings, { a: 3 })).toBe(30);
-    });
-
-    it("is 0 for empty listings", () => {
-      expect(computeTotalCost([], { a: 3 })).toBe(0);
-    });
-  });
-
   describe("isOverBudget", () => {
     it("is false when cost equals budget exactly", () => {
       expect(isOverBudget(100, 100)).toBe(false);
@@ -113,46 +94,6 @@ describe("turnCalculations", () => {
   describe("computeHouseholdTotalBudget", () => {
     it("adds cash and budgetPerRound", () => {
       expect(computeHouseholdTotalBudget(50, 100)).toBe(150);
-    });
-  });
-
-  describe("sumQuantities", () => {
-    it("sums all quantity values", () => {
-      expect(sumQuantities({ a: 1, b: 2, c: 3 })).toBe(6);
-    });
-
-    it("is 0 for empty record", () => {
-      expect(sumQuantities({})).toBe(0);
-    });
-  });
-
-  describe("computeMaxPurchaseQuantity", () => {
-    const listing = { id: "r1", price: 10, quantityAvailable: 20 };
-
-    it("is capped by remaining cash after other listings' cost", () => {
-      // totalBudget=100, 이미 다른 항목에 70원을 담았으면 남은 30원으로 3개까지만 가능
-      expect(computeMaxPurchaseQuantity(listing, 100, 999, 70, 0)).toBe(3);
-    });
-
-    it("is capped by remaining unit budget after other listings' units", () => {
-      // maxUnits=10, 이미 다른 항목에 8개를 담았으면 2개까지만 가능(예산은 충분)
-      expect(computeMaxPurchaseQuantity(listing, 1000, 10, 0, 8)).toBe(2);
-    });
-
-    it("is capped by stock even when budget and unit limit both allow more", () => {
-      expect(computeMaxPurchaseQuantity(listing, 1000, 999, 0, 0)).toBe(20);
-    });
-
-    it("is 0 when other listings already consumed the entire budget", () => {
-      expect(computeMaxPurchaseQuantity(listing, 100, 999, 100, 0)).toBe(0);
-    });
-
-    it("is 0 when other listings already consumed the entire unit budget", () => {
-      expect(computeMaxPurchaseQuantity(listing, 1000, 5, 0, 5)).toBe(0);
-    });
-
-    it("never goes negative when other listings' totals exceed the budget/limit", () => {
-      expect(computeMaxPurchaseQuantity(listing, 100, 5, 150, 8)).toBe(0);
     });
   });
 
@@ -191,6 +132,49 @@ describe("turnCalculations", () => {
 
     it("returns empty array for empty input", () => {
       expect(filterEligibleRetailListings([])).toEqual([]);
+    });
+  });
+
+  /**
+   * 구매 매칭 알고리즘 재설계 Stage 2: 화면 실시간 미리보기가 서버가 실제로 쓰는 계산과
+   * 갈라지지 않도록, previewCategoryPurchase가 정말로 humanDecisions.resolveSingleCategoryPurchase를
+   * 그대로 호출하는지 확인한다(별도 계산 로직을 베껴 쓰지 않았는지, D-033류 재발 방지).
+   */
+  describe("previewCategoryPurchase", () => {
+    beforeEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const wholesaleListings: WholesaleListing[] = [
+      { id: "w1", companyId: "other-company", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 10 },
+    ];
+    const companies: Record<string, CompanyState> = {
+      "other-company": {
+        id: "other-company",
+        ownerId: "other-student",
+        kind: "student",
+        districtId: "downtown",
+        ledger: { cash: 0, cumulativeProfit: 0 },
+        strategyId: "stable",
+        productCategoryId: "food",
+        quality: 0.5,
+        inventoryQuantity: 0,
+        lastWholesalePrice: 10,
+        lastIndustrySwitchRound: null,
+      },
+    };
+
+    it("delegates directly to resolveSingleCategoryPurchase (same arguments, same return value)", () => {
+      const spy = vi.spyOn(humanDecisions, "resolveSingleCategoryPurchase");
+      const request = { priorityPicks: [{ listingId: "w1", quantity: 2 }], maxQuantity: 2 };
+      const rng = createRng(1);
+
+      const result = previewCategoryPurchase(wholesaleListings, companies, "buyer-student", request, 1000, 10, rng);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(wholesaleListings, companies, "buyer-student", request, 1000, 10, rng);
+      expect(result).toEqual(spy.mock.results[0]!.value);
+      expect(result.purchases).toEqual([{ listingId: "w1", quantity: 2, unitPrice: 10 }]);
     });
   });
 });

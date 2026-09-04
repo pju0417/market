@@ -57,6 +57,8 @@ function emptyMetricsShape(
     householdCategoryCount: {},
     householdTopCategorySpendShare: {},
     householdEssentialCategoriesMissed: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
   };
 }
 

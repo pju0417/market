@@ -16,13 +16,17 @@ import {
   syncPhaseTimer,
   type SessionEntry,
 } from "./sessionRegistry.js";
-import { DEFAULT_SUBMISSION_TIMEOUT_MS } from "./timeoutConfig.js";
+import { DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS } from "./timeoutConfig.js";
 import { DISTRICT_IDS, PRODUCT_CATEGORIES } from "../economy/config.js";
 import type {
+  AutoFillPreference,
   BusinessSetupChoices,
+  CategoryPurchaseRequest,
   CompanyDecisionInput,
-  PurchaseRequestLine,
+  PriorityPurchasePick,
   StoreDecisionInput,
+  StorePurchaseRequest,
+  SubmissionTimeoutSettings,
 } from "../multiplayer/GameSession.js";
 import type { DistrictId, ProductCategoryId } from "../types/domain.js";
 
@@ -122,12 +126,51 @@ export async function handleApiRequest(request: ApiRequest): Promise<ApiResponse
   return notFound();
 }
 
+/**
+ * 세 필드 모두 선택적이다 (구매 매칭 알고리즘 재설계 Stage 2) — 하나라도 있으면 나머지도
+ * `sessionRegistry.createSession`의 서버 기본값이 아니라 이 요청에서 명시적으로 채운 값을
+ * 써야 하므로, 세 필드를 하나로 묶어 "제출 제한시간 설정을 아예 안 보냈는지"를 한 번에
+ * 판단한다. `enabled`가 없으면 `npcGraduatedEntryEnabled`가 있어도 무시하지 않고 그대로
+ * 함께 반영한다(교사가 "제한시간은 기본값 그대로 두고 순차진입만 끄고 싶다"는 조합도
+ * 유효한 요청이기 때문) — 다만 개별 필드가 없으면 서버 기본값(D-029 기존 배포)에서 그
+ * 필드만 가져와 채운다.
+ */
+function isValidTimeoutSettingsBody(
+  body: Record<string, unknown>,
+): body is Record<string, unknown> & {
+  submissionTimeoutEnabled?: boolean;
+  submissionTimeoutMs?: number;
+  npcGraduatedEntryEnabled?: boolean;
+} {
+  if (body.submissionTimeoutEnabled !== undefined && typeof body.submissionTimeoutEnabled !== "boolean") return false;
+  if (body.submissionTimeoutMs !== undefined && typeof body.submissionTimeoutMs !== "number") return false;
+  if (body.npcGraduatedEntryEnabled !== undefined && typeof body.npcGraduatedEntryEnabled !== "boolean") return false;
+  return true;
+}
+
 function handleCreateSession(body: unknown): ApiResponse {
   if (!isRecord(body) || typeof body.studentCount !== "number" || !Number.isInteger(body.studentCount) || body.studentCount < 1) {
     return badRequest("studentCount must be a positive integer");
   }
+  if (!isValidTimeoutSettingsBody(body)) {
+    return badRequest("invalid submission timeout settings");
+  }
   const rngSeed = typeof body.rngSeed === "number" ? body.rngSeed : undefined;
-  const { sessionId, entry } = createSession(body.studentCount, rngSeed);
+
+  const hasTimeoutOverride =
+    body.submissionTimeoutEnabled !== undefined ||
+    body.submissionTimeoutMs !== undefined ||
+    body.npcGraduatedEntryEnabled !== undefined;
+  const timeoutSettings: SubmissionTimeoutSettings | undefined = hasTimeoutOverride
+    ? {
+        enabled: body.submissionTimeoutEnabled ?? DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS.enabled,
+        timeoutMs: body.submissionTimeoutMs ?? DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS.timeoutMs,
+        npcGraduatedEntryEnabled:
+          body.npcGraduatedEntryEnabled ?? DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS.npcGraduatedEntryEnabled,
+      }
+    : undefined;
+
+  const { sessionId, entry } = createSession(body.studentCount, rngSeed, timeoutSettings);
   // teacherToken은 세션 생성 응답에만 실린다 — 다른 어떤 라우트(GET /slots 등)도 이 값을
   // 다시 노출하지 않는다 (D-029, 무인증 라우트로의 유출 방지).
   return { status: 201, body: { sessionId, teacherToken: entry.teacherToken } };
@@ -211,11 +254,17 @@ async function handleState(sessionId: string, query: Readonly<Record<string, str
 }
 
 /**
- * 현재 phase의 제출 마감(`phaseStartedAt + DEFAULT_SUBMISSION_TIMEOUT_MS`)이 지났고 아직
- * 사람 입력을 기다리는 중이면, 막힌 phase를 강제로 뚫은 뒤(`advancePhase(true)`) 사람 입력이
- * 필요 없는 이어지는 phase들을 조용히 드레인한다(`advanceUntilInputRequired(false)`). 이
- * 정확한 순서를 지키지 않으면 "막혀서 대기 중인 phase에는 force가 적용되지 않는" 함정에
+ * 현재 phase의 제출 마감(`phaseStartedAt + entry.session.getSubmissionTimeoutSettings().timeoutMs`)
+ * 이 지났고 아직 사람 입력을 기다리는 중이면, 막힌 phase를 강제로 뚫은 뒤(`advancePhase(true)`)
+ * 사람 입력이 필요 없는 이어지는 phase들을 조용히 드레인한다(`advanceUntilInputRequired(false)`).
+ * 이 정확한 순서를 지키지 않으면 "막혀서 대기 중인 phase에는 force가 적용되지 않는" 함정에
  * 걸린다 (`GameSession.advanceUntilInputRequired`의 while 조건 참고, D-029).
+ *
+ * 구매 매칭 알고리즘 재설계 Stage 2: 마감시간과 활성화 여부는 이제 고정 상수
+ * (`DEFAULT_SUBMISSION_TIMEOUT_MS`)가 아니라 `entry.session.getSubmissionTimeoutSettings()`
+ * (교사가 세션 생성 시 설정한 값, 생략 시 `DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS`)를
+ * 따른다 — `enabled: false`면 이 함수는 폴링 하드 타임아웃 강제진행을 아예 건너뛴다(교사의
+ * 수동 강제진행 `/force-advance`는 이 설정과 무관하게 그대로 유효하다).
  *
  * round-result phase는 예외다 (D-030): 라운드 결과를 읽는 시간에 제출 타임아웃과 같은 리듬을
  * 강제로 상속시키지 않기 위해 자동 강제진행을 건너뛴다 — 교사의 수동 강제진행
@@ -243,7 +292,10 @@ async function checkAndApplyTimeout(entry: SessionEntry): Promise<void> {
   // 이 변화를 놓치지 않는다(code-reviewer 발견 버그, 아래 handleCloseLobby 주석도 참고).
   if (markLobbyClosedIfNeeded(entry)) entry.session.bumpVersion();
 
-  const deadline = entry.phaseStartedAt + DEFAULT_SUBMISSION_TIMEOUT_MS;
+  const timeoutSettings = entry.session.getSubmissionTimeoutSettings();
+  if (!timeoutSettings.enabled) return;
+
+  const deadline = entry.phaseStartedAt + timeoutSettings.timeoutMs;
   if (Date.now() >= deadline && entry.session.isWaitingForHumanInput()) {
     await entry.session.advancePhase(true);
     await entry.session.advanceUntilInputRequired(false);
@@ -301,12 +353,40 @@ function extractBearerToken(headers: Readonly<Record<string, string | undefined>
   return match?.[1];
 }
 
-function isPurchaseRequestLine(value: unknown): value is PurchaseRequestLine {
-  return isRecord(value) && typeof value.listingId === "string" && typeof value.quantity === "number";
+function isPriorityPurchasePick(value: unknown): value is PriorityPurchasePick {
+  return isRecord(value) && typeof value.listingId === "string" && typeof value.quantity === "number" && value.quantity > 0;
 }
 
-function isPurchaseRequestLineArray(value: unknown): value is PurchaseRequestLine[] {
-  return Array.isArray(value) && value.every(isPurchaseRequestLine);
+/** 최대 3개, listingId 중복 없음 (구매 매칭 알고리즘 재설계 Stage 1의 1~3순위 계약). */
+function isPriorityPurchasePickArray(value: unknown): value is PriorityPurchasePick[] {
+  if (!Array.isArray(value) || value.length > 3 || !value.every(isPriorityPurchasePick)) return false;
+  const listingIds = value.map((pick: PriorityPurchasePick) => pick.listingId);
+  return new Set(listingIds).size === listingIds.length;
+}
+
+function isAutoFillPreference(value: unknown): value is AutoFillPreference {
+  return value === "price" || value === "quality";
+}
+
+/** `StorePurchaseRequest`/`CategoryPurchaseRequest`가 공유하는 필드만 검증한다. */
+function hasValidPurchaseRequestFields(value: Record<string, unknown>): boolean {
+  if (!isPriorityPurchasePickArray(value.priorityPicks)) return false;
+  if (typeof value.maxQuantity !== "number" || value.maxQuantity < 0) return false;
+  if (value.maxUnitPrice !== undefined && (typeof value.maxUnitPrice !== "number" || value.maxUnitPrice < 0)) return false;
+  if (value.autoFillPreference !== undefined && !isAutoFillPreference(value.autoFillPreference)) return false;
+  return true;
+}
+
+function isStorePurchaseRequest(value: unknown): value is StorePurchaseRequest {
+  return isRecord(value) && hasValidPurchaseRequestFields(value);
+}
+
+function isCategoryPurchaseRequest(value: unknown): value is CategoryPurchaseRequest {
+  return isRecord(value) && isProductCategoryId(value.categoryId) && hasValidPurchaseRequestFields(value);
+}
+
+function isCategoryPurchaseRequestArray(value: unknown): value is CategoryPurchaseRequest[] {
+  return Array.isArray(value) && value.every(isCategoryPurchaseRequest);
 }
 
 function isCompanyDecisionInput(value: unknown): value is CompanyDecisionInput {
@@ -326,7 +406,7 @@ function isCompanyDecisionInput(value: unknown): value is CompanyDecisionInput {
 
 function isStoreDecisionInput(value: unknown): value is StoreDecisionInput {
   if (!isRecord(value)) return false;
-  if (!isPurchaseRequestLineArray(value.purchases)) return false;
+  if (value.purchaseRequest !== undefined && !isStorePurchaseRequest(value.purchaseRequest)) return false;
   if (value.retailPrice !== undefined && typeof value.retailPrice !== "number") return false;
   if (value.sellingCategoryId !== undefined && !isProductCategoryId(value.sellingCategoryId)) return false;
   return true;
@@ -377,8 +457,8 @@ async function handleSubmit(
       if (typeof householdId !== "string" || householdId !== player.householdId) {
         return forbidden("householdId does not belong to the authenticated player");
       }
-      if (!isPurchaseRequestLineArray(body.lines)) return badRequest("invalid purchase lines");
-      entry.session.submitHouseholdPurchases(householdId, body.lines);
+      if (!isCategoryPurchaseRequestArray(body.requests)) return badRequest("invalid purchase requests");
+      entry.session.submitHouseholdPurchases(householdId, body.requests);
     }
   } catch (error) {
     return badRequest(error instanceof Error ? error.message : String(error));

@@ -20,7 +20,7 @@
  * 진짜 `httpApi.ts`와 함께 번들된 상태에서 동작하는지는 실제 Apps Script 배포 전까지 확인
  * 불가능하다.
  */
-import type { GameSession } from "../multiplayer/GameSession.js";
+import type { GameSession, SubmissionTimeoutSettings } from "../multiplayer/GameSession.js";
 import type { SpreadsheetGateway, UuidGenerator } from "./hostInterfaces.js";
 import * as gasSessionStore from "./gasSessionStore.js";
 import { issueToken, resolvePlayerId } from "./gasTokenStore.js";
@@ -110,10 +110,22 @@ function wrapEntry(sessionId: string, gasEntry: gasSessionStore.SessionEntry): S
   return entry;
 }
 
-export function createSession(studentCount: number, rngSeed?: number): { sessionId: string; entry: SessionEntry } {
+/**
+ * `timeoutSettings`를 반드시 `gasSessionStore.createSession`까지 전달해야 한다 —
+ * 이 세 번째 인자를 빠뜨리면(구매 매칭 알고리즘 재설계 Stage 2, code-reviewer가 실제
+ * 번들 산출물에서 재현해 발견한 critical 버그) `httpApi.ts`가 교사 설정을 넘겨도 esbuild가
+ * 이 어댑터로 alias한 시점에 조용히 버려지고, 모든 Apps Script 세션이
+ * `GameSession`의 로컬 1인 플레이 기본값(`enabled: false`)으로 떨어져 제출 타임아웃
+ * 강제진행이 아예 작동하지 않게 된다.
+ */
+export function createSession(
+  studentCount: number,
+  rngSeed?: number,
+  timeoutSettings?: SubmissionTimeoutSettings,
+): { sessionId: string; entry: SessionEntry } {
   const gateway = requireGateway();
   const uuidGen = requireUuidGen();
-  const { sessionId, entry: gasEntry } = gasSessionStore.createSession(gateway, uuidGen, studentCount, rngSeed);
+  const { sessionId, entry: gasEntry } = gasSessionStore.createSession(gateway, uuidGen, studentCount, rngSeed, timeoutSettings);
   return { sessionId, entry: wrapEntry(sessionId, gasEntry) };
 }
 

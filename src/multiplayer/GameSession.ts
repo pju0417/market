@@ -14,14 +14,14 @@
  * GameState 자체에는 "누가 사람인가"를 담지 않는다 — 그건 세션/UI의 관심사이지 경제
  * 엔진이 알아야 할 정보가 아니다 (엔진↔UI 분리 원칙, CLAUDE.md 2절).
  */
-import type { HumanDecisionSource, StoreDecisionInput } from "../engine/simulateGame.js";
+import type { HumanDecisionSource, StoreDecisionInput, SubmissionTimeoutSettings } from "../engine/simulateGame.js";
 import { buildInitialGameState, createPhaseHandlers } from "../engine/simulateGame.js";
 import { RoundEngine } from "../engine/RoundEngine.js";
 import { createRng } from "../economy/rng.js";
 import type { StorageAdapter } from "../storage/StorageAdapter.js";
 import type {
+  CategoryPurchaseRequest,
   CompanyDecisionInput,
-  PurchaseRequestLine,
 } from "../economy/humanDecisions.js";
 import type {
   DistrictId,
@@ -31,6 +31,21 @@ import type {
   ProductCategoryId,
   RoundPhase,
 } from "../types/domain.js";
+
+/**
+ * 로컬(단일 기기, 1인 플레이 포함) 세션의 제출 제한시간 기본값 (구매 매칭 알고리즘 재설계
+ * Stage 1). 사용자 확정: 로컬 플레이는 기본적으로 제한시간을 끈다(enabled=false) — 그래도
+ * "사람 실제 시각순 먼저 + NPC 셔플 순서 나중"이라는 처리 순서 자체는 유지된다
+ * (orderBuyersForTurn, src/engine/simulateGame.ts 참고). Stage 2부터 생성자가 선택적
+ * `timeoutSettings` 인자를 받으므로, 이 상수는 그 인자를 생략했을 때만 쓰이는 기본값이다
+ * (`src/ui/screens/SetupScreen.tsx`의 로컬 1인 플레이 "고급 설정"도 기본 선택값을 이와
+ * 맞춘다).
+ */
+export const DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS: SubmissionTimeoutSettings = {
+  enabled: false,
+  timeoutMs: 120_000,
+  npcGraduatedEntryEnabled: true,
+};
 
 export interface BusinessSetupChoices {
   companyDistrictId: DistrictId;
@@ -55,10 +70,15 @@ export interface StepOutcome {
 export interface PendingSubmissionsSnapshot {
   companyInputs: Record<ParticipantId, CompanyDecisionInput>;
   storeRequests: Record<ParticipantId, StoreDecisionInput>;
-  householdRequests: Record<ParticipantId, PurchaseRequestLine[]>;
+  householdRequests: Record<ParticipantId, CategoryPurchaseRequest[]>;
   acknowledgedRoundResultPlayerIds: ParticipantId[];
   humanPlayerIds: ParticipantId[];
   lobbyMembershipFinalized: boolean;
+  /** 구매 매칭 알고리즘 재설계 Stage 1: 이번 phase에서 각 참여자의 제출이 접수된 시각(ms). */
+  storeRequestReceivedAt: Record<ParticipantId, number>;
+  householdRequestReceivedAt: Record<ParticipantId, number>;
+  /** 현재 phase가 시작된 시각(ms). */
+  phaseStartedAt: number;
 }
 
 /** 사람 입력이 필요한 phase에서, 아직 제출하지 않았는지 여부. */
@@ -99,7 +119,7 @@ export class GameSession {
   private humanPlayers: readonly PlayerState[];
   private readonly pendingCompanyInputs = new Map<ParticipantId, CompanyDecisionInput>();
   private readonly pendingStoreRequests = new Map<ParticipantId, StoreDecisionInput>();
-  private readonly pendingHouseholdRequests = new Map<ParticipantId, PurchaseRequestLine[]>();
+  private readonly pendingHouseholdRequests = new Map<ParticipantId, CategoryPurchaseRequest[]>();
   /** round-result phase에서 각 학생이 결과를 확인(ack)했는지 (D-030: 라운드 결과만은
    * 전원이 확인해야 다음 라운드로 진행하는 국지적 예외). */
   private readonly acknowledgedRoundResultPlayerIds = new Set<ParticipantId>();
@@ -109,6 +129,12 @@ export class GameSession {
   private version = 0;
   private advancingPromise: Promise<StepOutcome> | undefined;
   private storage: StorageAdapter | undefined;
+  /** 구매 매칭 알고리즘 재설계 Stage 1: 각 참여자의 이번 phase 제출 접수 시각(ms). */
+  private readonly storeRequestReceivedAt = new Map<ParticipantId, number>();
+  private readonly householdRequestReceivedAt = new Map<ParticipantId, number>();
+  /** 현재 phase가 시작된 시각(ms) — orderBuyersForTurn의 NPC 순차진입 계산 기준점. */
+  private phaseStartedAt: number;
+  private readonly timeoutSettings: SubmissionTimeoutSettings;
 
   /**
    * resumeState를 주면 새로 만들지 않고 저장된 상태를 그대로 이어서 쓴다 (새로고침 복원용,
@@ -135,6 +161,11 @@ export class GameSession {
    * 내보낸 `PendingSubmissionsSnapshot`(제출 버퍼 + 로비 확정 상태)을 그대로 복원해 이어서
    * 쓰기 위한 것으로, 보통 `resumeState`와 함께 쓰인다. 생략하면(기존 모든 호출부가 그렇듯)
    * 완전히 빈 제출 버퍼로 시작하는 기존 동작 그대로다.
+   *
+   * `timeoutSettings`는 맨 뒤에 추가했다(구매 매칭 알고리즘 재설계 Stage 2) — 교사가 세션
+   * 생성 시 제출 제한시간/NPC 순차진입 여부를 직접 정할 수 있게 한 것으로, 생략하면(기존
+   * 모든 호출부가 그렇듯) `DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS`(로컬 1인 플레이 기본값,
+   * Stage 1 그대로)를 쓴다.
    */
   constructor(
     rngSeed: number = Date.now(),
@@ -142,12 +173,17 @@ export class GameSession {
     resumeState?: GameState,
     studentCount: number = 1,
     pending?: PendingSubmissionsSnapshot,
+    timeoutSettings?: SubmissionTimeoutSettings,
   ) {
     this.state = resumeState ?? buildInitialGameState(studentCount, rngSeed);
     this.humanPlayers = this.state.players;
     if (this.humanPlayers.length === 0) {
       throw new Error("GameSession requires at least one human player");
     }
+
+    this.phaseStartedAt = Date.now();
+    // `pending.phaseStartedAt`은 아래 restorePendingSubmissions에서 별도로 복원한다.
+    this.timeoutSettings = timeoutSettings ?? DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS;
 
     if (setupChoices && !resumeState && this.humanPlayers.length === 1) {
       this.applyBusinessSetupChoices(this.humanPlayers[0]!.id, setupChoices);
@@ -161,6 +197,10 @@ export class GameSession {
       getCompanyInput: (id) => this.pendingCompanyInputs.get(id),
       getStorePurchaseRequest: (id) => this.pendingStoreRequests.get(id),
       getHouseholdPurchaseRequest: (id) => this.pendingHouseholdRequests.get(id),
+      getStoreSubmissionReceivedAt: (id) => this.storeRequestReceivedAt.get(id),
+      getHouseholdSubmissionReceivedAt: (id) => this.householdRequestReceivedAt.get(id),
+      getPhaseStartedAt: () => this.phaseStartedAt,
+      getSubmissionTimeoutSettings: () => this.timeoutSettings,
     };
 
     const effectiveSeed = this.state.config.rngSeed;
@@ -175,9 +215,16 @@ export class GameSession {
    * `pending`을 생략하면 기존 호출부(로컬 서버의 새로고침 복원 경로 포함)와 완전히 동일하게
    * 빈 제출 버퍼로 재개한다 — Apps Script 세션 저장소(Milestone 5)만 `pending`을 넘겨
    * 라운드 도중 버퍼링된 제출값과 로비 확정 상태까지 이어서 복원한다.
+   *
+   * `timeoutSettings`도 생략 가능하다(구매 매칭 알고리즘 재설계 Stage 2) — 생략하면
+   * 생성자와 동일하게 `DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS`를 쓴다.
    */
-  static resumeFromState(savedState: GameState, pending?: PendingSubmissionsSnapshot): GameSession {
-    return new GameSession(savedState.config.rngSeed, undefined, savedState, 1, pending);
+  static resumeFromState(
+    savedState: GameState,
+    pending?: PendingSubmissionsSnapshot,
+    timeoutSettings?: SubmissionTimeoutSettings,
+  ): GameSession {
+    return new GameSession(savedState.config.rngSeed, undefined, savedState, 1, pending, timeoutSettings);
   }
 
   /**
@@ -271,6 +318,15 @@ export class GameSession {
     for (const playerId of pending.acknowledgedRoundResultPlayerIds) {
       this.acknowledgedRoundResultPlayerIds.add(playerId);
     }
+    for (const [storeId, receivedAt] of Object.entries(pending.storeRequestReceivedAt ?? {})) {
+      this.storeRequestReceivedAt.set(storeId, receivedAt);
+    }
+    for (const [householdId, receivedAt] of Object.entries(pending.householdRequestReceivedAt ?? {})) {
+      this.householdRequestReceivedAt.set(householdId, receivedAt);
+    }
+    if (pending.phaseStartedAt !== undefined) {
+      this.phaseStartedAt = pending.phaseStartedAt;
+    }
     this.lobbyMembershipFinalized = pending.lobbyMembershipFinalized;
     this.humanPlayers = pending.humanPlayerIds
       .map((id) => this.state.players.find((p) => p.id === id))
@@ -290,6 +346,9 @@ export class GameSession {
       acknowledgedRoundResultPlayerIds: [...this.acknowledgedRoundResultPlayerIds],
       humanPlayerIds: this.humanPlayers.map((p) => p.id),
       lobbyMembershipFinalized: this.lobbyMembershipFinalized,
+      storeRequestReceivedAt: Object.fromEntries(this.storeRequestReceivedAt),
+      householdRequestReceivedAt: Object.fromEntries(this.householdRequestReceivedAt),
+      phaseStartedAt: this.phaseStartedAt,
     };
   }
 
@@ -320,6 +379,18 @@ export class GameSession {
    */
   getVersion(): number {
     return this.version;
+  }
+
+  /**
+   * 이 세션의 제출 제한시간 설정 (구매 매칭 알고리즘 재설계 Stage 2). 서버 계층
+   * (`src/server/httpApi.ts`의 `checkAndApplyTimeout`)이 폴링 기반 하드 타임아웃
+   * 강제진행의 실제 마감시간·활성화 여부를 판단할 때 이 값을 읽어야 한다 — 교사가
+   * 세션 생성 시 넘긴 값이 여기 그대로 반영돼 있으므로, 서버가 별도의 고정 상수
+   * (`DEFAULT_SUBMISSION_TIMEOUT_MS`)만 참조하면 교사 설정이 실제 강제진행 시점에
+   * 반영되지 않는 불일치가 생긴다.
+   */
+  getSubmissionTimeoutSettings(): SubmissionTimeoutSettings {
+    return this.timeoutSettings;
   }
 
   /**
@@ -384,15 +455,17 @@ export class GameSession {
       throw new Error(`Unknown or non-human storeId "${storeId}"`);
     }
     this.pendingStoreRequests.set(storeId, input);
+    this.storeRequestReceivedAt.set(storeId, Date.now());
     this.notify();
   }
 
-  submitHouseholdPurchases(householdId: ParticipantId, lines: PurchaseRequestLine[]): void {
+  submitHouseholdPurchases(householdId: ParticipantId, requests: CategoryPurchaseRequest[]): void {
     this.assertPhase("household-turn");
     if (!this.humanPlayers.some((p) => p.householdId === householdId)) {
       throw new Error(`Unknown or non-human householdId "${householdId}"`);
     }
-    this.pendingHouseholdRequests.set(householdId, lines);
+    this.pendingHouseholdRequests.set(householdId, requests);
+    this.householdRequestReceivedAt.set(householdId, Date.now());
     this.notify();
   }
 
@@ -444,6 +517,11 @@ export class GameSession {
       this.pendingStoreRequests.clear();
       this.pendingHouseholdRequests.clear();
       this.acknowledgedRoundResultPlayerIds.clear();
+      this.storeRequestReceivedAt.clear();
+      this.householdRequestReceivedAt.clear();
+      // advancePhase() 호출 자체가 항상 "한 phase 실행 + 다음 phase로 전환"을 의미하므로,
+      // "phase가 실제로 바뀌었을 때만" 갱신하는 가드는 필요 없다 — 매번 무조건 갱신한다.
+      this.phaseStartedAt = Date.now();
       this.advancingPromise = undefined;
       this.notify();
       await this.persist();
@@ -513,4 +591,5 @@ export function phaseNeedsHumanInput(phase: RoundPhase): boolean {
   return PHASES_REQUIRING_HUMAN_INPUT.includes(phase);
 }
 
-export type { CompanyDecisionInput, PurchaseRequestLine, StoreDecisionInput, ParticipantId };
+export type { AutoFillPreference, PriorityPurchasePick, StorePurchaseRequest } from "../economy/humanDecisions.js";
+export type { CategoryPurchaseRequest, CompanyDecisionInput, ParticipantId, StoreDecisionInput, SubmissionTimeoutSettings };

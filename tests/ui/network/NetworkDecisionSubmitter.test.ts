@@ -1,6 +1,6 @@
 /**
  * `NetworkDecisionSubmitter`가 실제로 SessionClient(HTTP)에 넘기는 요청 바디를 검증한다
- * (Milestone 6, D-033 — 네트워크 계약 회귀 테스트). `AppsScriptDecisionSubmitter.test.ts`와
+ * (구매 매칭 알고리즘 재설계 Stage 2 — 네트워크 계약 회귀 테스트). `AppsScriptDecisionSubmitter.test.ts`와
  * 같은 필드 조합을 검증한다 — 한쪽만 고치면 로컬 서버/Apps Script 경로 중 하나가 조용히
  * 깨지므로, 두 파일을 항상 함께 유지해야 한다.
  */
@@ -53,19 +53,32 @@ describe("NetworkDecisionSubmitter", () => {
     });
   });
 
-  it("submits store decisions including retailPrice when provided", async () => {
+  it("submits store decisions including purchaseRequest and retailPrice when provided (구매 매칭 알고리즘 재설계 Stage 2)", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new SessionClient("http://example.test", fetchImpl);
     const submitter = new NetworkDecisionSubmitter(client, "SESSION1", "tok-1");
 
     await submitter.submitStoreDecision("store-1", {
-      purchases: [{ listingId: "listing-1", quantity: 2 }],
+      purchaseRequest: {
+        priorityPicks: [{ listingId: "listing-1", quantity: 2 }],
+        maxQuantity: 5,
+        maxUnitPrice: 1000,
+        autoFillPreference: "quality",
+      },
       retailPrice: 500,
     });
 
     expect(decodeBody(calls[0]!)).toEqual({
       storeId: "store-1",
-      input: { purchases: [{ listingId: "listing-1", quantity: 2 }], retailPrice: 500 },
+      input: {
+        purchaseRequest: {
+          priorityPicks: [{ listingId: "listing-1", quantity: 2 }],
+          maxQuantity: 5,
+          maxUnitPrice: 1000,
+          autoFillPreference: "quality",
+        },
+        retailPrice: 500,
+      },
     });
   });
 
@@ -75,40 +88,47 @@ describe("NetworkDecisionSubmitter", () => {
     const submitter = new NetworkDecisionSubmitter(client, "SESSION1", "tok-1");
 
     await submitter.submitStoreDecision("store-1", {
-      purchases: [{ listingId: "listing-1", quantity: 2 }],
+      purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
       retailPrice: 500,
       sellingCategoryId: "toys",
     });
 
     expect(decodeBody(calls[0]!)).toEqual({
       storeId: "store-1",
-      input: { purchases: [{ listingId: "listing-1", quantity: 2 }], retailPrice: 500, sellingCategoryId: "toys" },
+      input: {
+        purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
+        retailPrice: 500,
+        sellingCategoryId: "toys",
+      },
     });
   });
 
-  it("omits retailPrice and sellingCategoryId entirely when not provided", async () => {
+  it("omits purchaseRequest, retailPrice and sellingCategoryId entirely when not provided", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new SessionClient("http://example.test", fetchImpl);
     const submitter = new NetworkDecisionSubmitter(client, "SESSION1", "tok-1");
 
-    await submitter.submitStoreDecision("store-1", { purchases: [{ listingId: "listing-1", quantity: 2 }] });
+    await submitter.submitStoreDecision("store-1", {});
 
     const body = decodeBody(calls[0]!) as { storeId: string; input: Record<string, unknown> };
-    expect(body).toEqual({ storeId: "store-1", input: { purchases: [{ listingId: "listing-1", quantity: 2 }] } });
+    expect(body).toEqual({ storeId: "store-1", input: {} });
+    expect(Object.keys(body.input)).not.toContain("purchaseRequest");
     expect(Object.keys(body.input)).not.toContain("retailPrice");
     expect(Object.keys(body.input)).not.toContain("sellingCategoryId");
   });
 
-  it("submits household purchases to the household submit path", async () => {
+  it("submits household purchase requests to the household submit path", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new SessionClient("http://example.test", fetchImpl);
     const submitter = new NetworkDecisionSubmitter(client, "SESSION1", "tok-1");
 
-    await submitter.submitHouseholdPurchases("household-1", [{ listingId: "listing-2", quantity: 3 }]);
+    await submitter.submitHouseholdPurchases("household-1", [
+      { categoryId: "food", priorityPicks: [{ listingId: "listing-2", quantity: 3 }], maxQuantity: 3 },
+    ]);
 
     expect(decodeBody(calls[0]!)).toEqual({
       householdId: "household-1",
-      lines: [{ listingId: "listing-2", quantity: 3 }],
+      requests: [{ categoryId: "food", priorityPicks: [{ listingId: "listing-2", quantity: 3 }], maxQuantity: 3 }],
     });
   });
 });

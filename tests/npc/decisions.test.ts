@@ -102,6 +102,8 @@ function makeRoundMetrics(round: number, overrides: Partial<RoundMetrics> = {}):
     householdCategoryCount: {},
     householdTopCategorySpendShare: {},
     householdEssentialCategoriesMissed: {},
+    wholesaleCategoryClearing: {},
+    retailCategoryClearing: {},
     ...overrides,
   };
 }

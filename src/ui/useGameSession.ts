@@ -1,9 +1,11 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { GameSession, type BusinessSetupChoices } from "../multiplayer/GameSession.js";
+import { GameSession, type BusinessSetupChoices, type SubmissionTimeoutSettings } from "../multiplayer/GameSession.js";
 import { LocalStorageAdapter } from "../storage/LocalStorageAdapter.js";
 import type { GameState } from "../types/domain.js";
 
-export type GameInit = { rngSeed: number; choices: BusinessSetupChoices } | { resumeState: GameState };
+export type GameInit =
+  | { rngSeed: number; choices: BusinessSetupChoices; timeoutSettings?: SubmissionTimeoutSettings }
+  | { resumeState: GameState };
 
 /**
  * `GameSession`(경제 엔진 계층)이 유일한 진실 공급원이다 — 이 훅은 구독만 하고 상태를
@@ -20,7 +22,10 @@ export type GameInit = { rngSeed: number; choices: BusinessSetupChoices } | { re
  */
 export function useGameSession(init: GameInit) {
   const [session] = useState(() => {
-    const s = "resumeState" in init ? GameSession.resumeFromState(init.resumeState) : new GameSession(init.rngSeed, init.choices);
+    const s =
+      "resumeState" in init
+        ? GameSession.resumeFromState(init.resumeState)
+        : new GameSession(init.rngSeed, init.choices, undefined, 1, undefined, init.timeoutSettings);
     s.enableAutoSave(new LocalStorageAdapter(window.localStorage));
     return s;
   });

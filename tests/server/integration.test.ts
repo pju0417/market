@@ -139,13 +139,13 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
 
     const submitHouseholdA = await postJson(
       `/api/sessions/${sessionId}/submit/household`,
-      { householdId: playerA.householdId, lines: [] },
+      { householdId: playerA.householdId, requests: [] },
       tokenA,
     );
     expect(submitHouseholdA.status).toBe(200);
     const submitHouseholdB = await postJson(
       `/api/sessions/${sessionId}/submit/household`,
-      { householdId: playerB.householdId, lines: [] },
+      { householdId: playerB.householdId, requests: [] },
       tokenB,
     );
     expect(submitHouseholdB.status).toBe(200);
@@ -278,8 +278,8 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
     expect(submitStoreB.status).toBe(200);
 
     const [submitHouseholdA, submitHouseholdB] = await Promise.all([
-      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerA.householdId, lines: [] }, tokenA),
-      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerB.householdId, lines: [] }, tokenB),
+      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerA.householdId, requests: [] }, tokenA),
+      postJson(`/api/sessions/${sessionId}/submit/household`, { householdId: playerB.householdId, requests: [] }, tokenB),
     ]);
     expect(submitHouseholdA.status).toBe(200);
     expect(submitHouseholdB.status).toBe(200);
@@ -355,7 +355,7 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
 
       const submitHousehold = await postJson(
         `/api/sessions/${sessionId}/submit/household`,
-        { householdId: playerA.householdId, lines: [] },
+        { householdId: playerA.householdId, requests: [] },
         tokenA,
       );
       expect(submitHousehold.status).toBe(200);
@@ -443,13 +443,13 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
 
         const submitHouseholdA = await postJson(
           `/api/sessions/${sessionId}/submit/household`,
-          { householdId: playerA.householdId, lines: [] },
+          { householdId: playerA.householdId, requests: [] },
           tokenA,
         );
         expect(submitHouseholdA.status).toBe(200);
         const submitHouseholdB = await postJson(
           `/api/sessions/${sessionId}/submit/household`,
-          { householdId: playerB.householdId, lines: [] },
+          { householdId: playerB.householdId, requests: [] },
           tokenB,
         );
         expect(submitHouseholdB.status).toBe(200);

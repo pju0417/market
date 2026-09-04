@@ -38,13 +38,13 @@ describe("AppsScriptDecisionSubmitter", () => {
     });
   });
 
-  it("submits store decisions including retailPrice when provided", async () => {
+  it("submits store decisions including purchaseRequest and retailPrice when provided (구매 매칭 알고리즘 재설계 Stage 2)", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
     const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
 
     await submitter.submitStoreDecision("store-1", {
-      purchases: [{ listingId: "listing-1", quantity: 2 }],
+      purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
       retailPrice: 500,
     });
 
@@ -54,22 +54,26 @@ describe("AppsScriptDecisionSubmitter", () => {
     expect(result.request.path).toBe("/api/sessions/SESSION1/submit/store");
     expect(result.request.body).toEqual({
       storeId: "store-1",
-      input: { purchases: [{ listingId: "listing-1", quantity: 2 }], retailPrice: 500 },
+      input: {
+        purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
+        retailPrice: 500,
+      },
     });
   });
 
-  it("omits retailPrice entirely when not provided", async () => {
+  it("omits purchaseRequest and retailPrice entirely when not provided", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
     const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
 
-    await submitter.submitStoreDecision("store-1", { purchases: [{ listingId: "listing-1", quantity: 2 }] });
+    await submitter.submitStoreDecision("store-1", {});
 
     const result = decodeRequest(calls[0]!);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const body = result.request.body as { storeId: string; input: Record<string, unknown> };
-    expect(body).toEqual({ storeId: "store-1", input: { purchases: [{ listingId: "listing-1", quantity: 2 }] } });
+    expect(body).toEqual({ storeId: "store-1", input: {} });
+    expect(Object.keys(body.input)).not.toContain("purchaseRequest");
     expect(Object.keys(body.input)).not.toContain("retailPrice");
   });
 
@@ -79,7 +83,7 @@ describe("AppsScriptDecisionSubmitter", () => {
     const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
 
     await submitter.submitStoreDecision("store-1", {
-      purchases: [{ listingId: "listing-1", quantity: 2 }],
+      purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
       retailPrice: 500,
       sellingCategoryId: "toys",
     });
@@ -89,7 +93,11 @@ describe("AppsScriptDecisionSubmitter", () => {
     if (!result.ok) return;
     expect(result.request.body).toEqual({
       storeId: "store-1",
-      input: { purchases: [{ listingId: "listing-1", quantity: 2 }], retailPrice: 500, sellingCategoryId: "toys" },
+      input: {
+        purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
+        retailPrice: 500,
+        sellingCategoryId: "toys",
+      },
     });
   });
 
@@ -98,7 +106,9 @@ describe("AppsScriptDecisionSubmitter", () => {
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
     const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
 
-    await submitter.submitStoreDecision("store-1", { purchases: [{ listingId: "listing-1", quantity: 2 }] });
+    await submitter.submitStoreDecision("store-1", {
+      purchaseRequest: { priorityPicks: [{ listingId: "listing-1", quantity: 2 }], maxQuantity: 2 },
+    });
 
     const result = decodeRequest(calls[0]!);
     expect(result.ok).toBe(true);
@@ -123,12 +133,14 @@ describe("AppsScriptDecisionSubmitter", () => {
     });
   });
 
-  it("submits household purchases to the household submit path", async () => {
+  it("submits household purchase requests to the household submit path", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
     const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
 
-    await submitter.submitHouseholdPurchases("household-1", [{ listingId: "listing-2", quantity: 3 }]);
+    await submitter.submitHouseholdPurchases("household-1", [
+      { categoryId: "food", priorityPicks: [{ listingId: "listing-2", quantity: 3 }], maxQuantity: 3 },
+    ]);
 
     const result = decodeRequest(calls[0]!);
     expect(result.ok).toBe(true);
@@ -136,7 +148,7 @@ describe("AppsScriptDecisionSubmitter", () => {
     expect(result.request.path).toBe("/api/sessions/SESSION1/submit/household");
     expect(result.request.body).toEqual({
       householdId: "household-1",
-      lines: [{ listingId: "listing-2", quantity: 3 }],
+      requests: [{ categoryId: "food", priorityPicks: [{ listingId: "listing-2", quantity: 3 }], maxQuantity: 3 }],
     });
   });
 });

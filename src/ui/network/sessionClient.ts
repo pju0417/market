@@ -7,7 +7,7 @@
  * 기반으로 미리 만들어 둔다.
  */
 import type { GameState, ParticipantId, ProductCategoryId } from "../../types/domain.js";
-import type { BusinessSetupChoices } from "../../multiplayer/GameSession.js";
+import type { BusinessSetupChoices, SubmissionTimeoutSettings } from "../../multiplayer/GameSession.js";
 
 export interface CreateSessionResult {
   sessionId: string;
@@ -38,9 +38,27 @@ export interface StateResult {
 
 export type PollResult = StateResult | { unchanged: true };
 
-export interface PurchaseRequestLine {
+/** 자동배분(안전망) 정렬 기준. 생략 시 "price" (구매 매칭 알고리즘 재설계 Stage 1). */
+export type AutoFillPreference = "price" | "quality";
+
+/** 1~3순위 수동 지정 한 건. */
+export interface PriorityPurchasePick {
   listingId: string;
   quantity: number;
+}
+
+/** 가게의 도매 매입 요청 (구매 매칭 알고리즘 재설계 Stage 1). `src/economy/humanDecisions.ts`의
+ * 동명 타입과 모양이 같다 — 네트워크 경계를 넘어야 해서 이 파일이 독립적으로 재선언한다. */
+export interface StorePurchaseRequest {
+  priorityPicks: PriorityPurchasePick[];
+  maxQuantity: number;
+  maxUnitPrice?: number;
+  autoFillPreference?: AutoFillPreference;
+}
+
+/** 가계의 소매 구매 요청. 최대 4개 카테고리를 한 턴에 선언 가능. */
+export interface CategoryPurchaseRequest extends StorePurchaseRequest {
+  categoryId: ProductCategoryId;
 }
 
 export interface CompanyDecisionInput {
@@ -52,7 +70,8 @@ export interface CompanyDecisionInput {
 }
 
 export interface StoreDecisionInput {
-  purchases: PurchaseRequestLine[];
+  /** 생략하면 이번 라운드 도매 매입 자체를 하지 않는다("안 삼", 봇 위임이 아니다). */
+  purchaseRequest?: StorePurchaseRequest;
   retailPrice?: number;
   /** 판매 카테고리 변경 요청 (Milestone 6). 생략하면 "변경하지 않기로 선택"으로 취급된다. */
   sellingCategoryId?: ProductCategoryId;
@@ -98,11 +117,26 @@ export class SessionClient {
     return body as T;
   }
 
-  createSession(studentCount: number, rngSeed?: number): Promise<CreateSessionResult> {
+  /**
+   * `timeoutSettings`는 선택적이다(구매 매칭 알고리즘 재설계 Stage 2) — 생략하면 서버가
+   * 다인원 세션 기본값(`DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS`, D-029 기존 배포와
+   * 하위호환)을 쓴다.
+   */
+  createSession(studentCount: number, rngSeed?: number, timeoutSettings?: SubmissionTimeoutSettings): Promise<CreateSessionResult> {
     return this.request<CreateSessionResult>("/api/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ studentCount, rngSeed }),
+      body: JSON.stringify({
+        studentCount,
+        rngSeed,
+        ...(timeoutSettings
+          ? {
+              submissionTimeoutEnabled: timeoutSettings.enabled,
+              submissionTimeoutMs: timeoutSettings.timeoutMs,
+              npcGraduatedEntryEnabled: timeoutSettings.npcGraduatedEntryEnabled,
+            }
+          : {}),
+      }),
     });
   }
 
@@ -148,12 +182,12 @@ export class SessionClient {
     sessionId: string,
     token: string,
     householdId: ParticipantId,
-    lines: PurchaseRequestLine[],
+    requests: CategoryPurchaseRequest[],
   ): Promise<{ ok: true }> {
     return this.request(`/api/sessions/${sessionId}/submit/household`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ householdId, lines }),
+      body: JSON.stringify({ householdId, requests }),
     });
   }
 

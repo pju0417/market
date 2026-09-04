@@ -7,7 +7,17 @@
  * 않는 모듈도 재사용해야 하기 때문) — 여기서는 기존 import 경로가 깨지지 않도록 그대로
  * re-export한다.
  */
-import type { ProductCategoryId, RetailListing, WholesaleListing } from "../types/domain.js";
+import { resolveSingleCategoryPurchase, type CategoryPurchaseRequest, type StorePurchaseRequest } from "../economy/humanDecisions.js";
+import type { Rng } from "../economy/rng.js";
+import type { PurchaseLine } from "../npc/decisions.js";
+import type {
+  CompanyState,
+  ParticipantId,
+  ProductCategoryId,
+  RetailListing,
+  StoreState,
+  WholesaleListing,
+} from "../types/domain.js";
 
 export { computeAvailableCash, computeCompanyFixedCost, computeHouseholdTotalBudget, computeStoreFixedCost } from "../economy/costs.js";
 
@@ -26,40 +36,13 @@ export function computeProductionCost(quantity: number, unitCost: number): numbe
   return quantity * unitCost;
 }
 
-/** 매물 목록 + 수량 선택(listingId -> quantity) 조합의 총 비용. */
-export function computeTotalCost(listings: readonly CostableListing[], quantities: Record<string, number>): number {
-  return listings.reduce((sum, listing) => sum + (quantities[listing.id] ?? 0) * listing.price, 0);
-}
-
 export function isOverBudget(cost: number, budget: number): boolean {
   return cost > budget;
-}
-
-export function sumQuantities(quantities: Record<string, number>): number {
-  return Object.values(quantities).reduce((sum, q) => sum + q, 0);
 }
 
 /** 수량 제한 계산에 필요한 최소 필드. */
 export interface QuantityLimitedListing extends CostableListing {
   quantityAvailable: number;
-}
-
-/**
- * 가계가 이 매물 하나에 지금 담을 수 있는 최대 수량. 재고, 라운드 전체 구매 개수 한도뿐
- * 아니라 "이미 다른 매물에 담아둔 금액/개수"까지 제외한 나머지로 계산한다 — 즉 다른 항목에
- * 먼저 담을수록 이 항목의 최대치가 실시간으로 줄어들어, 애초에 예산을 넘는 수량을 입력창에
- * 넣을 수 없게 한다.
- */
-export function computeMaxPurchaseQuantity(
-  listing: QuantityLimitedListing,
-  totalBudget: number,
-  maxUnits: number,
-  otherListingsCost: number,
-  otherListingsUnits: number,
-): number {
-  const remainingCash = Math.max(0, totalBudget - otherListingsCost);
-  const remainingUnits = Math.max(0, maxUnits - otherListingsUnits);
-  return Math.max(0, Math.min(listing.quantityAvailable, remainingUnits, computeMaxAffordable(remainingCash, listing.price)));
 }
 
 /**
@@ -79,4 +62,30 @@ export function filterEligibleWholesaleListings(
  */
 export function filterEligibleRetailListings(listings: readonly RetailListing[]): RetailListing[] {
   return listings.filter((listing) => listing.quantityAvailable > 0);
+}
+
+export interface CategoryPurchasePreview {
+  purchases: PurchaseLine[];
+  spentCash: number;
+  spentUnits: number;
+}
+
+/**
+ * 가게/가계 턴 화면의 "실시간 미리보기"가 서버(runStoreTurn/runHouseholdTurn)와 정확히 같은
+ * 숫자를 보여주도록, `src/economy/humanDecisions.ts`의 `resolveSingleCategoryPurchase`를
+ * 그대로 호출한다(D-033류 화면-서버 계산 불일치 재발 방지 — 화면이 별도로 계산 로직을 베껴
+ * 쓰지 않는다). `ownersLookup`/`ownerIdOfBuyer`는 자기 거래 방어적 재검증에 쓰인다 — 가게
+ * 화면은 `state.companies`/`store.ownerId`를, 가계 화면은 `state.stores`/`household.ownerId`를
+ * 그대로 넘기면 된다.
+ */
+export function previewCategoryPurchase(
+  eligible: readonly (WholesaleListing | RetailListing)[],
+  ownersLookup: Readonly<Record<ParticipantId, CompanyState>> | Readonly<Record<ParticipantId, StoreState>>,
+  ownerIdOfBuyer: ParticipantId,
+  request: StorePurchaseRequest | CategoryPurchaseRequest,
+  cashBudget: number,
+  unitBudget: number,
+  rng: Rng,
+): CategoryPurchasePreview {
+  return resolveSingleCategoryPurchase(eligible, ownersLookup, ownerIdOfBuyer, request, cashBudget, unitBudget, rng);
 }

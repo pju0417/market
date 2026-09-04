@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeCategoryAverages,
+  computeCategoryClearingSummary,
   computeCompetitorCount,
   computeStoreCompetitorCount,
   estimateCategoryMargin,
@@ -166,5 +167,70 @@ describe("estimateCategoryMargin (Milestone 6, D-033)", () => {
   it("can be negative when unitCost exceeds the average selling price", () => {
     const listings = [makeListing({ id: "a", categoryId: "food", price: 5 })];
     expect(estimateCategoryMargin(listings, "food", 20)).toBe(5 - 20);
+  });
+});
+
+describe("computeCategoryClearingSummary (구매 매칭 알고리즘 재설계 Stage 1)", () => {
+  it("returns undefined when the category had no listings at 'before'", () => {
+    const before = [makeListing({ id: "a", categoryId: "apparel" })];
+    const after = [makeListing({ id: "a", categoryId: "apparel", quantityAvailable: 0 })];
+    expect(computeCategoryClearingSummary(before, after, "food")).toBeUndefined();
+  });
+
+  it("computes totalListed/totalSold and highest sold / lowest unsold price from a fully-sold and a fully-unsold listing", () => {
+    const before = [
+      makeListing({ id: "sold-out", categoryId: "food", quantityAvailable: 10, price: 8 }),
+      makeListing({ id: "untouched", categoryId: "food", quantityAvailable: 5, price: 12 }),
+    ];
+    const after = [
+      makeListing({ id: "sold-out", categoryId: "food", quantityAvailable: 0, price: 8 }),
+      makeListing({ id: "untouched", categoryId: "food", quantityAvailable: 5, price: 12 }),
+    ];
+    const summary = computeCategoryClearingSummary(before, after, "food");
+
+    expect(summary).toEqual({ totalListed: 15, totalSold: 10, highestSoldPrice: 8, lowestUnsoldPrice: 12 });
+  });
+
+  it("picks the highest price among listings that sold at least one unit, and the lowest price among listings with remaining stock", () => {
+    const before = [
+      // Fully sold out — must NOT count toward lowestUnsoldPrice even though it's the cheapest.
+      makeListing({ id: "cheap-sold-out", categoryId: "food", quantityAvailable: 10, price: 5 }),
+      makeListing({ id: "expensive-sold", categoryId: "food", quantityAvailable: 10, price: 9 }),
+      makeListing({ id: "cheap-unsold", categoryId: "food", quantityAvailable: 10, price: 6 }),
+      makeListing({ id: "expensive-unsold", categoryId: "food", quantityAvailable: 10, price: 20 }),
+    ];
+    const after = [
+      makeListing({ id: "cheap-sold-out", categoryId: "food", quantityAvailable: 0, price: 5 }),
+      makeListing({ id: "expensive-sold", categoryId: "food", quantityAvailable: 8, price: 9 }),
+      makeListing({ id: "cheap-unsold", categoryId: "food", quantityAvailable: 10, price: 6 }),
+      makeListing({ id: "expensive-unsold", categoryId: "food", quantityAvailable: 10, price: 20 }),
+    ];
+    const summary = computeCategoryClearingSummary(before, after, "food");
+
+    expect(summary!.highestSoldPrice).toBe(9);
+    expect(summary!.lowestUnsoldPrice).toBe(6);
+    expect(summary!.totalSold).toBe(10 + 2);
+  });
+
+  it("leaves highestSoldPrice/lowestUnsoldPrice undefined when nothing sold / nothing remains, respectively", () => {
+    const nothingSoldBefore = [makeListing({ id: "a", categoryId: "food", quantityAvailable: 10, price: 5 })];
+    const nothingSoldAfter = [makeListing({ id: "a", categoryId: "food", quantityAvailable: 10, price: 5 })];
+    const nothingSold = computeCategoryClearingSummary(nothingSoldBefore, nothingSoldAfter, "food");
+    expect(nothingSold!.highestSoldPrice).toBeUndefined();
+    expect(nothingSold!.lowestUnsoldPrice).toBe(5);
+
+    const allSoldBefore = [makeListing({ id: "a", categoryId: "food", quantityAvailable: 10, price: 5 })];
+    const allSoldAfter = [makeListing({ id: "a", categoryId: "food", quantityAvailable: 0, price: 5 })];
+    const allSold = computeCategoryClearingSummary(allSoldBefore, allSoldAfter, "food");
+    expect(allSold!.highestSoldPrice).toBe(5);
+    expect(allSold!.lowestUnsoldPrice).toBeUndefined();
+  });
+
+  it("treats a listing missing from 'after' as fully unsold (defensive default)", () => {
+    const before = [makeListing({ id: "a", categoryId: "food", quantityAvailable: 10, price: 5 })];
+    const after: ReturnType<typeof makeListing>[] = [];
+    const summary = computeCategoryClearingSummary(before, after, "food");
+
+    expect(summary).toEqual({ totalListed: 10, totalSold: 0, highestSoldPrice: undefined, lowestUnsoldPrice: 5 });
   });
 });
