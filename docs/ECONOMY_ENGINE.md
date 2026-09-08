@@ -26,10 +26,24 @@
 ([ROUND_FLOW.md](ROUND_FLOW.md)의 라운드 내부 10단계 순서, 11번째 "다음 라운드 시작"은
 `RoundEngine.runGame()`이 담당하는 라운드 간 전환).
 
+**D-036부터**: 가게/가계 턴에서 구매자를 처리하는 순서는 `orderBuyersForTurn`이 결정한다.
+`decisionSource`가 없는(사람 입력 자체가 없는) 순수 헤드리스 시뮬레이션에서는 기존 그대로
+매 라운드 무작위 셔플이고 수치가 완전히 동일하다 — 이 경로를 손대지 않는 것이 D-036 구현의
+핵심 제약이었다. 사람이 있는 경로(로컬/네트워크 플레이)에서는 실제 제출 시각 기준으로
+정렬하고, `SubmissionTimeoutSettings`(같은 파일에 타입 정의 — 서버 개념이 아니라 엔진이
+직접 알아야 하는 값이라 `src/server`가 아닌 여기 둔다, D-032 계층 분리 원칙)가 활성화돼
+있으면 제한시간의 절반이 지난 시점부터 미제출 NPC에게도 가상 제출 시각을 부여해 같은
+정렬에 합류시킨다(NPC 순차 진입).
+
 ### `src/economy/`
 실제 경제 계산 로직: `config.ts`(카테고리/상권/비용/전략 프리셋 — 모든 밸런스 수치가 모여
 있는 단일 지점), `rng.ts`(결정론적 PRNG), `market.ts`(자기 거래 금지 필터, 품질 가중평균),
-`settlement.ts`(원장 차감/적립 — 고정비는 capped, 재량 지출은 비-clamp로 버그를 드러냄).
+`settlement.ts`(원장 차감/적립 — 고정비는 capped, 재량 지출은 비-clamp로 버그를 드러냄),
+`purchaseMatching.ts`(D-036, 신규 — "1~3순위 수동 지정 + 부족분 자동배분" 매칭의 저수준
+공통 로직 `allocateCategoryPurchase`. 사람의 자동배분 부분과 NPC/봇 구매가 모두 이 함수 하나를
+공유한다), `humanDecisions.ts`(사람 입력을 봇과 동일하게 clamp/검증하고, 클라이언트가 보낸
+가격이 아니라 서버 쪽 listing 가격으로 재계산 — `resolveSingleCategoryPurchase`가 수동
+순위 지정과 자동배분 두 단계를 오케스트레이션한다).
 
 ### `src/npc/`
 NPC 기업/가게/소비자의 의사결정 로직 (`decisions.ts`) + 인원수·업종 쏠림을 함께 보는 보충
