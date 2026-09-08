@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { analyzeHouseholdTurn } from "../../advisor/householdAdvisor.js";
 import { ESSENTIAL_CATEGORY_IDS, PRODUCT_CATEGORIES } from "../../economy/config.js";
 import type { AutoFillPreference, CategoryPurchaseRequest, PriorityPurchasePick } from "../../economy/humanDecisions.js";
+import { incomeEventBudgetMultiplier } from "../../economy/incomeEvent.js";
 import { eligibleRetailListingsForHousehold } from "../../economy/market.js";
 import { createRng } from "../../economy/rng.js";
 import { MAX_HOUSEHOLD_PURCHASE_UNITS } from "../../npc/decisions.js";
@@ -10,6 +11,7 @@ import type { GameState, HouseholdState, ParticipantId, ProductCategoryId, Retai
 import { CATEGORY_LABELS, formatWon } from "../labels.js";
 import { computeHouseholdTotalBudget, filterEligibleRetailListings, previewCategoryPurchase } from "../turnCalculations.js";
 import { AdvisorPanel } from "./AdvisorPanel.js";
+import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
 
 const FIXED_CATEGORY_ORDER: readonly ProductCategoryId[] = [
@@ -37,7 +39,8 @@ interface Props {
  * (previewCategoryPurchase)를 순차 호출해 정확히 같은 숫자를 보여준다.
  */
 export function HouseholdTurnScreen({ session, state, version, household, stores, onSubmitted, disabled = false }: Props) {
-  const totalBudget = computeHouseholdTotalBudget(household.ledger.cash, household.budgetPerRound);
+  const effectiveBudgetPerRound = household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound);
+  const totalBudget = computeHouseholdTotalBudget(household.ledger.cash, effectiveBudgetPerRound);
 
   const eligibleAll = filterEligibleRetailListings(eligibleRetailListingsForHousehold(household, state.retailListings, stores));
   const eligibleByCategory: Partial<Record<ProductCategoryId, RetailListing[]>> = {};
@@ -109,6 +112,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
   return (
     <>
     <MarketEventBanner state={state} role="household" />
+    <IncomeEventBanner state={state} role="household" />
     <div className="card">
       <h2>가계 턴</h2>
       <div className="stat-row">
@@ -117,7 +121,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
       </div>
       <div className="stat-row">
         <span className="label">이번 라운드 받을 용돈</span>
-        <span className="value">+{formatWon(household.budgetPerRound)}</span>
+        <span className="value">+{formatWon(effectiveBudgetPerRound)}</span>
       </div>
       <div className="stat-row">
         <span className="label">이번 라운드 쓸 수 있는 돈</span>

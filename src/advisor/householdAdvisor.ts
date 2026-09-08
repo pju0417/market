@@ -15,6 +15,7 @@
  */
 import { computeHouseholdTotalBudget } from "../economy/costs.js";
 import { HOUSEHOLD_STRATEGY_PRESETS } from "../economy/config.js";
+import { incomeEventBudgetMultiplier } from "../economy/incomeEvent.js";
 import { eligibleRetailListingsForHousehold } from "../economy/market.js";
 import type { GameState, ParticipantId } from "../types/domain.js";
 import { DEFAULT_ADVISOR_RULES, type AdvisorRules } from "./rules.js";
@@ -31,7 +32,8 @@ export function analyzeHouseholdTurn(
     throw new Error(`analyzeHouseholdTurn: unknown householdId "${householdId}"`);
   }
 
-  const totalBudget = computeHouseholdTotalBudget(household.ledger.cash, household.budgetPerRound);
+  const effectiveBudgetPerRound = household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound);
+  const totalBudget = computeHouseholdTotalBudget(household.ledger.cash, effectiveBudgetPerRound);
   const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
 
   const lastMetrics = state.roundMetrics.at(-1);
@@ -56,7 +58,7 @@ export function analyzeHouseholdTurn(
 
   const situationSummary: string[] = [];
   situationSummary.push(
-    `현재 보유 현금(저축)은 ${formatWon(household.ledger.cash)}이며, 이번 라운드 받을 용돈(${formatWon(household.budgetPerRound)})을 더하면 ` +
+    `현재 보유 현금(저축)은 ${formatWon(household.ledger.cash)}이며, 이번 라운드 받을 용돈(${formatWon(effectiveBudgetPerRound)})을 더하면 ` +
       `이번 라운드 쓸 수 있는 돈은 ${formatWon(totalBudget)}입니다.`,
   );
 

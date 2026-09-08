@@ -16,6 +16,7 @@ import {
   PRODUCT_CATEGORIES,
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
+import { incomeEventBudgetMultiplier } from "../economy/incomeEvent.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
 import { computeCategoryClearingSummary } from "../economy/marketStats.js";
@@ -541,7 +542,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     );
     for (const householdId of orderedIds) {
       const household = state.households[householdId]!;
-      credit(household.ledger, household.budgetPerRound);
+      credit(household.ledger, household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound));
 
       const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
       const requested = decisionSource?.getHouseholdPurchaseRequest(household.id);

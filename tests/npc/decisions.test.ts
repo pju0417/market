@@ -351,9 +351,15 @@ describe("decideCompanyMarketEventSwitch (Milestone 6 제안 C, docs/DECISIONS.m
   const foodUnitCostDuringEvent = companyUnitCost("food", "downtown") * 1.3;
   const toysUnitCost = companyUnitCost("toys", "downtown");
   const switchCost = industrySwitchCost("food", "toys"); // 100 * (1 - 0.3) = 70
-  // toysAvgPrice is chosen so switchRoundProfit works out to exactly 20 * 3 = 60 per round
-  // (quantity is 20 for both stay/switch projections given the cash levels used below).
-  const toysAvgPrice = toysUnitCost + 3;
+  // MARKET_EVENT_ROUNDS is now [6] only (D-037), so remaining is always 0 or 1 -- there is no
+  // multi-round compounding case anymore. toysAvgPrice is chosen so switchRoundProfit works out
+  // to exactly 20 * 6 = 120 per round (quantity is 20 for both stay/switch projections given the
+  // cash levels used below), clearing the switchCost (70) with margin to spare at remaining=1.
+  const toysAvgPrice = toysUnitCost + 6;
+  // A lower-margin variant used by the "not worth switching" test below, where
+  // switchRoundProfit works out to exactly 20 * 3 = 60 per round (still below switchCost at
+  // remaining=1).
+  const toysAvgPriceLowMargin = toysUnitCost + 3;
 
   const foodEvent: ActiveMarketEvent = { categoryId: "food", costMultiplier: 1.3 };
 
@@ -441,7 +447,11 @@ describe("decideCompanyMarketEventSwitch (Milestone 6 제안 C, docs/DECISIONS.m
     // electronics' switch cost (90, similarity 0.1) exceeds cash and must be excluded even though
     // it would otherwise look attractive; apparel's switch cost (80, similarity 0.2) is affordable
     // and offers a clearly positive net gain, so it should be picked instead. (toys is left out of
-    // the wholesale listings entirely here so it isn't a candidate at all.)
+    // the wholesale listings entirely here so it isn't a candidate at all.) cash is capped below
+    // electronicsSwitchCost (90), so post-switch cash for apparel is small (~9) and the projected
+    // switch quantity works out to just 1 unit -- the apparel price margin below (90) is set large
+    // enough that even 1 unit clears the switch cost at remaining=1 (MARKET_EVENT_ROUNDS=[6] only,
+    // D-037).
     const apparelUnitCost = companyUnitCost("apparel", "downtown");
     const apparelSwitchCost = industrySwitchCost("food", "apparel"); // 100 * (1 - 0.2) = 80
     const electronicsSwitchCost = industrySwitchCost("food", "electronics"); // 100 * (1 - 0.1) = 90
@@ -458,7 +468,7 @@ describe("decideCompanyMarketEventSwitch (Milestone 6 제안 C, docs/DECISIONS.m
         // Deliberately very attractive so that, if the cost filter were broken, electronics would
         // wrongly win instead of being excluded.
         { id: "w-electronics", companyId: "other", categoryId: "electronics", quantityAvailable: 100, quality: 0.5, price: electronicsUnitCost + 50 },
-        { id: "w-apparel", companyId: "other", categoryId: "apparel", quantityAvailable: 100, quality: 0.5, price: apparelUnitCost + 50 },
+        { id: "w-apparel", companyId: "other", categoryId: "apparel", quantityAvailable: 100, quality: 0.5, price: apparelUnitCost + 90 },
       ],
     });
 
@@ -467,21 +477,27 @@ describe("decideCompanyMarketEventSwitch (Milestone 6 제안 C, docs/DECISIONS.m
     expect(company.productCategoryId).toBe("apparel");
   });
 
-  it("stays put when switching isn't worth it for the single remaining event round (round 7, remaining=1)", () => {
+  it("stays put when switching isn't worth it for the single remaining event round (round 6, remaining=1)", () => {
     const company = makeSwitchableCompany();
-    const state = makeMarketState({ currentRound: 7 });
+    const state = makeMarketState({
+      currentRound: 6,
+      wholesaleListings: [
+        { id: "w-food", companyId: "other", categoryId: "food", quantityAvailable: 100, quality: 0.5, price: foodUnitCostDuringEvent },
+        { id: "w-toys", companyId: "other", categoryId: "toys", quantityAvailable: 100, quality: 0.5, price: toysAvgPriceLowMargin },
+      ],
+    });
     decideCompanyMarketEventSwitch(company, state, foodEvent);
 
     // stayRoundProfit is 0 (avgPrice == unitCost), switchRoundProfit*1 (60) - switchCost (70) = -10 <= 0.
     expect(company.productCategoryId).toBe("food");
   });
 
-  it("switches when the same per-round margin is compounded over more remaining event rounds (round 6, remaining=2)", () => {
+  it("switches when the per-round margin clearly outweighs the switch cost even for the single remaining event round (round 6, remaining=1)", () => {
     const company = makeSwitchableCompany();
     const state = makeMarketState({ currentRound: 6 });
     decideCompanyMarketEventSwitch(company, state, foodEvent);
 
-    // switchRoundProfit*2 (120) - switchCost (70) = 50 > staySeriesProfit (0).
+    // switchRoundProfit*1 (120) - switchCost (70) = 50 > staySeriesProfit (0).
     expect(company.productCategoryId).toBe("toys");
   });
 

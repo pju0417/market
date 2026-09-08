@@ -98,11 +98,12 @@ function makeState(options: {
   roundMetrics?: RoundMetrics[];
   retailListings?: RetailListing[];
   stores?: Record<string, StoreState>;
+  currentRound?: number;
 }): GameState {
   const companies: Record<string, CompanyState> = {};
   return {
     config: { totalRounds: 7, studentPlayerIds: ["student-1"], rngSeed: 1 },
-    currentRound: 2,
+    currentRound: options.currentRound ?? 2,
     currentPhase: "household-turn",
     players: [{ id: "student-1", displayName: "Student 1", companyId: "c1", storeId: "s1", householdId: "h1" }],
     companies,
@@ -449,6 +450,37 @@ describe("analyzeHouseholdTurn", () => {
       expect(advice.causeHypotheses.some((h) => h.id === "high-budget-usage")).toBe(false);
       expect(advice.causeHypotheses.some((h) => h.id === "low-budget-usage")).toBe(false);
       expectWellFormedAdvice(advice);
+    });
+  });
+
+  describe("income event budget multiplier (round 7, D-037)", () => {
+    it("round 7: applies the 0.7x income event multiplier to the displayed budget and total", () => {
+      const household = makeHousehold({ ledger: { cash: 50, cumulativeProfit: 0 }, budgetPerRound: 100 });
+      const state = makeState({ households: { h1: household }, currentRound: 7 });
+
+      const advice = analyzeHouseholdTurn(state, "h1");
+      const summaryText = advice.situationSummary.join("\n");
+
+      // effective budget = 100 * 0.7 = 70; total = cash(50) + 70 = 120.
+      expect(summaryText).toContain("70원");
+      expect(summaryText).toContain("120원");
+      expect(summaryText).not.toContain("100원");
+      expect(summaryText).not.toContain("150원");
+      // household.budgetPerRound itself must not be mutated by the multiplier.
+      expect(household.budgetPerRound).toBe(100);
+    });
+
+    it("round 6: does not apply the income event multiplier (regression guard)", () => {
+      const household = makeHousehold({ ledger: { cash: 50, cumulativeProfit: 0 }, budgetPerRound: 100 });
+      const state = makeState({ households: { h1: household }, currentRound: 6 });
+
+      const advice = analyzeHouseholdTurn(state, "h1");
+      const summaryText = advice.situationSummary.join("\n");
+
+      // no income event in round 6: effective budget = 100, total = cash(50) + 100 = 150.
+      expect(summaryText).toContain("100원");
+      expect(summaryText).toContain("150원");
+      expect(summaryText).not.toContain("70원");
     });
   });
 

@@ -11,8 +11,8 @@ import {
 } from "../../src/economy/marketEvents.js";
 
 describe("getActiveMarketEvent", () => {
-  it("returns undefined outside rounds 6 and 7", () => {
-    for (const round of [1, 2, 3, 4, 5, 8, 9]) {
+  it("returns undefined outside round 6 (round 7 is now the income event, D-037)", () => {
+    for (const round of [1, 2, 3, 4, 5, 7, 8, 9]) {
       expect(getActiveMarketEvent(42, round)).toBeUndefined();
     }
   });
@@ -26,27 +26,11 @@ describe("getActiveMarketEvent", () => {
     expect(third).toEqual(first);
   });
 
-  it("returns a valid category with the configured cost multiplier for rounds 6 and 7", () => {
+  it("returns a valid category with the configured cost multiplier for round 6", () => {
     const roundSix = getActiveMarketEvent(42, 6);
-    const roundSeven = getActiveMarketEvent(42, 7);
     expect(roundSix).toBeDefined();
-    expect(roundSeven).toBeDefined();
     expect(PRODUCT_CATEGORIES).toContain(roundSix!.categoryId);
-    expect(PRODUCT_CATEGORIES).toContain(roundSeven!.categoryId);
     expect(roundSix!.costMultiplier).toBe(1.3);
-    expect(roundSeven!.costMultiplier).toBe(1.3);
-  });
-
-  it("can produce different categories for round 6 vs round 7 under the same seed (not hardcoded to always match)", () => {
-    // Scan a range of seeds; at least one must show round 6 and round 7 differing, since rounds
-    // are re-rolled independently (derived rng seed includes `round`).
-    const seeds = Array.from({ length: 50 }, (_, i) => i);
-    const sawDifference = seeds.some((seed) => {
-      const six = getActiveMarketEvent(seed, 6)!;
-      const seven = getActiveMarketEvent(seed, 7)!;
-      return six.categoryId !== seven.categoryId;
-    });
-    expect(sawDifference).toBe(true);
   });
 
   it("different rngSeeds can produce different categories for the same round", () => {
@@ -58,8 +42,9 @@ describe("getActiveMarketEvent", () => {
 
 describe("countRemainingMarketEventRounds", () => {
   it("counts event rounds at or after fromRound", () => {
-    expect(countRemainingMarketEventRounds(6)).toBe(2);
-    expect(countRemainingMarketEventRounds(7)).toBe(1);
+    // MARKET_EVENT_ROUNDS narrowed to [6] (D-037): round 7 is no longer a market event round.
+    expect(countRemainingMarketEventRounds(6)).toBe(1);
+    expect(countRemainingMarketEventRounds(7)).toBe(0);
     expect(countRemainingMarketEventRounds(5)).toBe(0);
     expect(countRemainingMarketEventRounds(1)).toBe(0);
     expect(countRemainingMarketEventRounds(8)).toBe(0);

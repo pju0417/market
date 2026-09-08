@@ -271,11 +271,24 @@ export function essentialNpcPriorityBonus(categoryId: ProductCategoryId): number
 /**
  * 시장 변화 이벤트("원자재비 변동", Milestone 6, docs/DECISIONS.md D-035) 발생 라운드. 다른
  * 곳에 이 숫자들을 하드코딩하지 않고 src/economy/marketEvents.ts의 헬퍼 뒤에 숨긴다.
+ * 6라운드에 항상 발생한다(7라운드는 소득 변화 이벤트, docs/DECISIONS.md D-037 참고).
  */
-export const MARKET_EVENT_ROUNDS: readonly number[] = [6, 7];
+export const MARKET_EVENT_ROUNDS: readonly number[] = [6];
 
 /** 이벤트 발생 시 해당 카테고리의 그 라운드 companyUnitCost 결과값 전체에 곱해지는 배율. */
 export const MARKET_EVENT_COST_MULTIPLIER = 1.3;
+
+/**
+ * 소비자 소득 변화 이벤트("불황") 발생 라운드 — 원자재비 이벤트(MARKET_EVENT_ROUNDS)와 서로
+ * 겹치지 않게 별도 라운드에 배정한다 (Milestone 6 제안 A, docs/DECISIONS.md D-037).
+ */
+export const INCOME_EVENT_ROUNDS: readonly number[] = [7];
+
+/**
+ * 이벤트 발생 시 가계 라운드 용돈(COSTS.householdBudgetPerRound)에 곱해지는 배율. 항상
+ * 감소(불황) 방향으로만 발생한다(사용자 확정).
+ */
+export const INCOME_EVENT_BUDGET_MULTIPLIER = 0.7;
 
 /**
  * 시장 변화 이벤트 대상 카테고리를 뽑는 데 쓰는 rng 시드 오프셋. 게임플레이 rng(`rngSeed+1`,

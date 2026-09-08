@@ -13,6 +13,7 @@ import {
   isOverBudget,
 } from "../turnCalculations.js";
 import { AdvisorPanel } from "./AdvisorPanel.js";
+import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
 
 interface Props {
@@ -74,6 +75,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
   return (
     <>
     <MarketEventBanner state={state} role="company" />
+    <IncomeEventBanner state={state} role="company" />
     <div className="card">
       <h2>기업 턴</h2>
       <div className="stat-row">
