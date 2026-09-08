@@ -32,14 +32,29 @@ function loadTeacherToken(sessionId: string): string | undefined {
   return window.sessionStorage.getItem(teacherTokenStorageKey(sessionId)) ?? undefined;
 }
 
+/** 이 컴포넌트가 실제로 호출하는 메서드만 담은 최소 구조적 타입 (Milestone 5 3부 화면 배선).
+ * `SessionClient`와 `AppsScriptSessionClient` 양쪽 모두 이 타입을 구조적으로 만족하므로, 교사가
+ * 어느 백엔드로 세션을 만들었는지에 따라 그 클라이언트를 그대로 넘길 수 있다. */
+export interface SessionMonitorClient {
+  getSlots(sessionId: string): Promise<PlayerSlot[]>;
+  getState(sessionId: string, since?: number): ReturnType<SessionClient["getState"]>;
+  forceAdvance(sessionId: string, teacherToken: string): Promise<{ ok: true; gameOver?: boolean }>;
+}
+
 interface Props {
   sessionId: string;
   baseUrl?: string;
   fetchImpl?: FetchLike;
+  /** 생략하면 기존 그대로 내부에서 로컬 서버용 `SessionClient`를 새로 만든다 — 이 prop은
+   * Apps Script 백엔드 등 다른 클라이언트를 써야 하는 화면(`AppsScriptTeacherSessionScreen`)만
+   * 넘긴다. `TeacherSessionScreen.tsx`(로컬 서버 전용)는 이 prop을 넘기지 않으므로 동작이
+   * 한 글자도 바뀌지 않는다. */
+  client?: SessionMonitorClient;
 }
 
-export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Props) {
-  const client = useMemo(() => new SessionClient(baseUrl, fetchImpl), [baseUrl, fetchImpl]);
+export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl, client: injectedClient }: Props) {
+  const localClient = useMemo(() => new SessionClient(baseUrl, fetchImpl), [baseUrl, fetchImpl]);
+  const client = injectedClient ?? localClient;
   const [slots, setSlots] = useState<PlayerSlot[]>([]);
   const [stateResult, setStateResult] = useState<StateResult | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);

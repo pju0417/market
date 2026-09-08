@@ -1174,13 +1174,38 @@ JSON `{status, body}` 봉투)을 따르는 클라이언트를 준비해둔다. �
       2건만 기록 — `unwrap()`의 `NaN` 상태코드 견고성 이론적 갭, Apps Script가 JSON 봉투
       대신 Google 자체 오류 페이지를 반환할 때 `ApiError`로 안 감싸이는 기존 `sessionClient.ts`
       공유 한계). 상세 근거는 docs/DECISIONS.md D-032 참고.
-- [ ] **이번에도 다루지 않은 것(다음 작업)**: 실제 Google 계정/OAuth/배포/Sheets API 호출
-      (근본적으로 이 리포지토리 안에서는 검증 불가능 — `entry.ts`의 문서 주석 참고), 화면
-      배선(`NetworkGameScreen`/`NetworkJoinScreen`/`App.tsx`가 로컬 서버용/Apps Script용
-      클라이언트 중 무엇을 쓸지 고르게 하는 것 — 실제 배포된 `.../exec` URL 없이는 의미
-      있게 검증 불가), `useAppsScriptGameSession.ts`(로컬 서버용 `useNetworkGameSession.ts`
-      대응 React 훅 — 이 저장소에 jsdom/`@testing-library/react`가 없어 훅 자체를 테스트할
-      방법이 없어 미룸), 실제 배포 가이드 문서.
+- [x] **화면 배선 + `useAppsScriptGameSession.ts` + 배포 가이드 갱신**: `useAppsScriptGameSession.ts`
+      (신규, `useNetworkGameSession.ts`와 동일한 폴링 로직에 클라이언트 타입만 교체)와
+      `NetworkBackend` 판별 유니언(`src/ui/network/backend.ts`, `{kind:"local-server"}` /
+      `{kind:"apps-script"}`)을 추가했다. 로컬 서버용 4개 화면(`TeacherSessionScreen`/
+      `NetworkJoinScreen`/`NetworkLobbyScreen`/`NetworkGameScreen`)은 한 글자도 건드리지
+      않고, 기존 컨벤션(형제 파일 복제)대로 Apps Script 전용 자매 화면 4개
+      (`AppsScriptTeacherSessionScreen`/`AppsScriptNetworkJoinScreen`/
+      `AppsScriptNetworkLobbyScreen`/`AppsScriptNetworkGameScreen`, `src/ui/screens/`)를
+      새로 만들었다. `NetworkBackendSelectScreen.tsx`(신규)가 "함께 하기" 이후 첫 단계로
+      로컬 서버/Apps Script URL 중 하나를 고르게 하고, `parseAppsScriptWebAppUrl`
+      (`src/ui/network/parseAppsScriptWebAppUrl.ts`, 신규 순수 함수)로 입력 URL을 검증한다.
+      `App.tsx`의 `TopMode`에 `network-backend-select` 단계를 추가하고 나머지 network
+      variant들이 `client` 대신 `backend: NetworkBackend`를 갖도록 바꿔, `backend.kind`에
+      따라 완전히 다른 컴포넌트를 마운트한다(한 컴포넌트 안에서 훅을 조건부로 부르지
+      않도록 `react-hooks/rules-of-hooks` 준수). 구현 중 발견한 기존 버그: `NetworkSessionMonitor.tsx`가
+      `client` prop 없이 항상 내부에서 `new SessionClient(...)`를 만들어, Apps Script
+      세션에서도 조용히 로컬 서버를 폴링하던 문제를 optional `client` prop(구조적 타입
+      `SessionMonitorClient`) 추가로 고쳤다 — prop을 생략하면(`TeacherSessionScreen.tsx`)
+      기존 동작이 한 글자도 안 바뀐다.
+      검증: `npm run typecheck`(3개 tsconfig)·`npx eslint . --max-warnings=0`·
+      `npm test -- --run`(531개, 신규 9개 `parseAppsScriptWebAppUrl` 테스트 포함)·
+      `npm run build`(87모듈, 신규 파일들이 실제로 번들에 포함됨) 모두 통과.
+      `git diff --stat`으로 로컬 서버용 4개 파일/`useNetworkGameSession.ts`/
+      `src/appsScript`/`src/engine`/`src/economy`/`src/npc`/`src/advisor`/`src/server`가
+      전혀 바뀌지 않았음을 확인. `docs/APPS_SCRIPT_DEPLOYMENT.md`의 8번 단계를 "다음 단계
+      (범위 밖)"에서 실제 사용자 흐름 설명으로 갱신했다.
+- [ ] **여전히 다루지 않은 것**: 실제 Google 계정/OAuth/배포/Sheets API 호출(근본적으로 이
+      리포지토리 안에서는 검증 불가능 — `entry.ts`의 문서 주석 참고), 실제 배포된
+      `.../exec` URL을 화면에 붙여 넣어 학생 여러 명이 끝까지 진행해보는 end-to-end
+      브라우저 검증(이 환경에 Google 계정/브라우저가 없어 근본적으로 불가능). 새 `.tsx`
+      화면들에 대한 컴포넌트 테스트도 만들지 않았다(기존 4개 화면도 없음, jsdom/RTL 미도입
+      결정을 재검토하지 않음 — Milestone 2의 의도적 보류).
 
 ## Milestone 6 — UX 개선, 밸런싱, 교육 기능 확장
 

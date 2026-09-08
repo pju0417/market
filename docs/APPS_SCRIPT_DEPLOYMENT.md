@@ -15,11 +15,12 @@
 올리고 Web App으로 배포해 `.../exec` URL을 얻는 절차.
 
 **이 문서가 다루지 않는 것**:
-- 학생/교사가 실제로 그 URL을 쓰도록 화면을 배선하는 작업(`docs/TODO.md`의 Milestone 5
-  "3부" 남은 항목 — `AppsScriptSessionClient`를 `NetworkGameScreen`/`NetworkJoinScreen`에
-  실제로 연결하는 것). 이 문서의 8번 단계까지 마친 뒤, 그 URL로 별도 작업에서 진행한다.
 - 학교/교육청의 Google Workspace 정책 검토(6번 단계에서 언급하는 접근 권한 설정이
   기관 정책에 맞는지는 사용자가 직접 확인해야 한다).
+- 실제 Google 계정으로 배포한 `.../exec` URL을 이 저장소의 화면(8번 단계)에 붙여 넣어
+  진행한 end-to-end 검증. 화면 배선 자체는 이미 구현되어 있지만(8번 단계 참고), 실제
+  배포된 URL로 학생/교사 화면을 끝까지 눌러본 적은 없다 — 이 개발 환경에는 Google
+  계정/브라우저 접근이 없어 근본적으로 검증 불가능하다.
 
 ## 1. 사전 준비물
 
@@ -128,11 +129,36 @@ Apps Script 에디터에서 코드를 저장하는 것만으로는 이미 발급
 돌려 갱신된 번들을 붙여넣었을 때) **배포 → 배포 관리 → 기존 배포의 연필(수정) 아이콘 →
 버전: 새 버전 → 배포**를 통해 새 버전을 명시적으로 배포해야 라이브 URL에 반영된다.
 
-## 8. 다음 단계 (이 문서 밖)
+## 8. 화면에서 실제로 URL 사용하기
 
-여기까지 마치면 동작하는 `.../exec` URL이 생긴다. 이 URL을 화면에 실제로 연결하는 것
-(`AppsScriptSessionClient`/`AppsScriptDecisionSubmitter`를 `NetworkJoinScreen`/
-`NetworkGameScreen`/`App.tsx`에 배선)은 이 문서의 범위 밖이며, 별도 작업으로 진행한다.
+여기까지 마치면 동작하는 `.../exec` URL이 생긴다(발급됐다고 "정상 동작"까지 확인된 건
+아니다 — 6번 단계의 스모크 테스트로 최소한만 확인한 상태). Milestone 5 3부에서 화면 배선이
+실제로 구현됐다 — 게임 화면에서 이 URL을 다음 순서로 사용한다:
+
+1. 게임 첫 화면에서 **"함께 하기"**를 누른다.
+2. **"어떤 서버로 접속할까요?"** 화면(`NetworkBackendSelectScreen`)에서 **"Apps Script
+   웹앱 URL로 접속"**을 고른다. (기본 선택지인 "같은 Wi-Fi/기기의 로컬 서버"는 기존
+   `SessionClient`/로컬 `src/server` 경로 그대로다 — Apps Script와 무관하다.)
+3. 5번 단계에서 발급받은 `.../exec` URL을 입력하고 확인을 누른다. 입력값은
+   `parseAppsScriptWebAppUrl`(`src/ui/network/parseAppsScriptWebAppUrl.ts`)이 검증한다 —
+   빈 문자열은 거부하고, `https://`로 시작하지 않으면 거부한다. `/exec`로 끝나지 않아도
+   막지는 않지만(교사가 다른 형태의 배포 URL을 쓸 수도 있어 소프트 체크로만 둠) 화면에
+   경고 문구를 보여준다.
+4. 확인되면 기존과 동일한 "교사로 세션 만들기" / "학생으로 참가" 역할 선택 화면으로
+   넘어간다. 이후 흐름(세션 만들기·참가·창업 준비·라운드 진행)은 로컬 서버 경로와
+   화면 구성이 동일하지만, 내부적으로는 `AppsScriptSessionClient`/
+   `AppsScriptDecisionSubmitter`와 그 전용 화면들
+   (`AppsScriptTeacherSessionScreen`/`AppsScriptNetworkJoinScreen`/
+   `AppsScriptNetworkLobbyScreen`/`AppsScriptNetworkGameScreen`,
+   `src/ui/screens/`)이 대신 쓰인다 — 로컬 서버용 4개 화면(`TeacherSessionScreen` 등)은
+   전혀 건드리지 않고 형제 파일로 복제했다.
+
+**이 저장소 안에서 검증한 것**: 위 화면들의 타입체크·lint·유닛 테스트·빌드(번들에 실제로
+포함되는지)까지다. **검증하지 못한 것**: 실제로 배포된 `.../exec` URL을 이 화면에 붙여
+넣어 학생 여러 명이 끝까지 게임을 진행해보는 end-to-end 시나리오 — 이 개발 환경에는 실제
+Google 계정/브라우저가 없어 근본적으로 검증 불가능하다. 9번 단계의 미검증 리스크 목록
+(특히 CORS/리다이렉트, `LockService` 동시성, 폴링 할당량)은 여전히 유효하며, 실제 배포
+후 반드시 확인해야 한다.
 
 ## 9. 배포 후 반드시 확인해야 할 미검증 리스크 목록
 

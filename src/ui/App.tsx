@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { BusinessSetupChoices } from "../multiplayer/GameSession.js";
 import { GameSession } from "../multiplayer/GameSession.js";
 import { LocalStorageAdapter } from "../storage/LocalStorageAdapter.js";
@@ -6,10 +6,15 @@ import type { GameState, RoundPhase } from "../types/domain.js";
 import "./App.css";
 import { PHASE_LABELS } from "./labels.js";
 import type { PlayerSlot } from "./network/sessionClient.js";
-import { SessionClient } from "./network/sessionClient.js";
+import type { NetworkBackend } from "./network/backend.js";
+import { AppsScriptNetworkGameScreen } from "./screens/AppsScriptNetworkGameScreen.js";
+import { AppsScriptNetworkJoinScreen } from "./screens/AppsScriptNetworkJoinScreen.js";
+import { AppsScriptNetworkLobbyScreen } from "./screens/AppsScriptNetworkLobbyScreen.js";
+import { AppsScriptTeacherSessionScreen } from "./screens/AppsScriptTeacherSessionScreen.js";
 import { CompanyTurnScreen } from "./screens/CompanyTurnScreen.js";
 import { GameOverScreen } from "./screens/GameOverScreen.js";
 import { HouseholdTurnScreen } from "./screens/HouseholdTurnScreen.js";
+import { NetworkBackendSelectScreen } from "./screens/NetworkBackendSelectScreen.js";
 import { NetworkGameScreen } from "./screens/NetworkGameScreen.js";
 import { NetworkJoinScreen } from "./screens/NetworkJoinScreen.js";
 import { NetworkLobbyScreen } from "./screens/NetworkLobbyScreen.js";
@@ -228,15 +233,15 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
 type TopMode =
   | { kind: "mode-select" }
   | { kind: "local" }
-  | { kind: "network-role-select" }
-  | { kind: "network-teacher" }
-  | { kind: "network-join" }
-  | { kind: "network-lobby"; sessionId: string; token: string; slot: PlayerSlot }
-  | { kind: "network-playing"; sessionId: string; token: string; slot: PlayerSlot };
+  | { kind: "network-backend-select" }
+  | { kind: "network-role-select"; backend: NetworkBackend }
+  | { kind: "network-teacher"; backend: NetworkBackend }
+  | { kind: "network-join"; backend: NetworkBackend }
+  | { kind: "network-lobby"; backend: NetworkBackend; sessionId: string; token: string; slot: PlayerSlot }
+  | { kind: "network-playing"; backend: NetworkBackend; sessionId: string; token: string; slot: PlayerSlot };
 
 export function App() {
   const [mode, setMode] = useState<TopMode>({ kind: "mode-select" });
-  const client = useMemo(() => new SessionClient(), []);
 
   return (
     <div className="app-shell">
@@ -249,7 +254,7 @@ export function App() {
           <button className="primary" onClick={() => setMode({ kind: "local" })} style={{ marginRight: 12 }}>
             혼자 하기
           </button>
-          <button className="secondary" onClick={() => setMode({ kind: "network-role-select" })}>
+          <button className="secondary" onClick={() => setMode({ kind: "network-backend-select" })}>
             함께 하기
           </button>
         </div>
@@ -257,40 +262,77 @@ export function App() {
 
       {mode.kind === "local" && <LocalGameFlow />}
 
+      {mode.kind === "network-backend-select" && (
+        <NetworkBackendSelectScreen onSelect={(backend) => setMode({ kind: "network-role-select", backend })} />
+      )}
+
       {mode.kind === "network-role-select" && (
         <div className="card">
-          <button className="primary" onClick={() => setMode({ kind: "network-teacher" })} style={{ marginRight: 12 }}>
+          <button
+            className="primary"
+            onClick={() => setMode({ kind: "network-teacher", backend: mode.backend })}
+            style={{ marginRight: 12 }}
+          >
             교사로 세션 만들기
           </button>
-          <button className="secondary" onClick={() => setMode({ kind: "network-join" })}>
+          <button className="secondary" onClick={() => setMode({ kind: "network-join", backend: mode.backend })}>
             학생으로 참가
           </button>
         </div>
       )}
 
-      {mode.kind === "network-teacher" && <TeacherSessionScreen client={client} />}
-
-      {mode.kind === "network-join" && (
-        <NetworkJoinScreen
-          client={client}
-          onJoined={({ sessionId, token, slot }) => setMode({ kind: "network-lobby", sessionId, token, slot })}
-        />
+      {mode.kind === "network-teacher" && mode.backend.kind === "local-server" && (
+        <TeacherSessionScreen client={mode.backend.client} />
+      )}
+      {mode.kind === "network-teacher" && mode.backend.kind === "apps-script" && (
+        <AppsScriptTeacherSessionScreen client={mode.backend.client} />
       )}
 
-      {mode.kind === "network-lobby" && (
-        <NetworkLobbyScreen
-          client={client}
-          sessionId={mode.sessionId}
-          token={mode.token}
-          slot={mode.slot}
-          onLobbyClosed={() =>
-            setMode({ kind: "network-playing", sessionId: mode.sessionId, token: mode.token, slot: mode.slot })
+      {mode.kind === "network-join" && mode.backend.kind === "local-server" && (
+        <NetworkJoinScreen
+          client={mode.backend.client}
+          onJoined={({ sessionId, token, slot }) =>
+            setMode({ kind: "network-lobby", backend: mode.backend, sessionId, token, slot })
+          }
+        />
+      )}
+      {mode.kind === "network-join" && mode.backend.kind === "apps-script" && (
+        <AppsScriptNetworkJoinScreen
+          client={mode.backend.client}
+          onJoined={({ sessionId, token, slot }) =>
+            setMode({ kind: "network-lobby", backend: mode.backend, sessionId, token, slot })
           }
         />
       )}
 
-      {mode.kind === "network-playing" && (
-        <NetworkGameScreen client={client} sessionId={mode.sessionId} token={mode.token} slot={mode.slot} />
+      {mode.kind === "network-lobby" && mode.backend.kind === "local-server" && (
+        <NetworkLobbyScreen
+          client={mode.backend.client}
+          sessionId={mode.sessionId}
+          token={mode.token}
+          slot={mode.slot}
+          onLobbyClosed={() =>
+            setMode({ kind: "network-playing", backend: mode.backend, sessionId: mode.sessionId, token: mode.token, slot: mode.slot })
+          }
+        />
+      )}
+      {mode.kind === "network-lobby" && mode.backend.kind === "apps-script" && (
+        <AppsScriptNetworkLobbyScreen
+          client={mode.backend.client}
+          sessionId={mode.sessionId}
+          token={mode.token}
+          slot={mode.slot}
+          onLobbyClosed={() =>
+            setMode({ kind: "network-playing", backend: mode.backend, sessionId: mode.sessionId, token: mode.token, slot: mode.slot })
+          }
+        />
+      )}
+
+      {mode.kind === "network-playing" && mode.backend.kind === "local-server" && (
+        <NetworkGameScreen client={mode.backend.client} sessionId={mode.sessionId} token={mode.token} slot={mode.slot} />
+      )}
+      {mode.kind === "network-playing" && mode.backend.kind === "apps-script" && (
+        <AppsScriptNetworkGameScreen client={mode.backend.client} sessionId={mode.sessionId} token={mode.token} slot={mode.slot} />
       )}
     </div>
   );
