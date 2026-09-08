@@ -3,7 +3,6 @@ import { SessionClient, type FetchLike, type PlayerSlot, type StateResult } from
 import { translateNetworkError } from "../network/errorMessages.js";
 import { computeUnsubmittedParticipants } from "../network/submissionStatus.js";
 import { PHASE_LABELS } from "../labels.js";
-import { DEFAULT_SUBMISSION_TIMEOUT_MS } from "../../server/timeoutConfig.js";
 
 /**
  * Milestone 4 3단계("제출 타임아웃, 제출현황 UI, 담합 방지 재검증") 확인용 최소 컴포넌트다.
@@ -45,9 +44,14 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
   const [stateResult, setStateResult] = useState<StateResult | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [teacherToken] = useState<string | undefined>(() => loadTeacherToken(sessionId));
-  // 서버는 phase 시작 시각을 API로 노출하지 않으므로, 이 값은 "이 화면이 phase 전환을 처음
-  // 관찰한 시각" 기준의 추정치다 — 실제 타임아웃 판정은 서버(`sessionRegistry.syncPhaseTimer`)
-  // 가 별도로 하고, 이 카운트다운은 참고용 표시일 뿐이다.
+  // 서버는 phase 시작 "시각"(phaseStartedAt) 자체를 API로 노출하지 않으므로, 이 값은 "이
+  // 화면이 phase 전환을 처음 관찰한 시각" 기준의 추정치다 — 실제 타임아웃 판정은 서버
+  // (`sessionRegistry.syncPhaseTimer`)가 별도로 하고, 이 카운트다운은 참고용 표시일 뿐이다.
+  // 다만 얼마짜리 타임아웃인지/활성화 여부는(D-036부터 세션마다 다를 수 있음)
+  // `GET /state`의 `submissionTimeout`을 그대로 쓴다 — 예전에는 고정 상수
+  // `DEFAULT_SUBMISSION_TIMEOUT_MS`(120초)를 항상 표시해, 교사가 커스텀 시간을 설정하거나
+  // 타임아웃 자체를 꺼도 화면에는 반영되지 않는 버그가 있었다(실제 다인원 브라우저 검증
+  // 중 발견).
   const phaseObservedAtRef = useRef<{ phase: string; observedAt: number } | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
 
@@ -101,9 +105,11 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
     phaseObservedAtRef.current = { phase: currentPhase, observedAt: Date.now() };
   }
 
-  const remainingMs = phaseObservedAtRef.current
-    ? Math.max(0, DEFAULT_SUBMISSION_TIMEOUT_MS - (now - phaseObservedAtRef.current.observedAt))
-    : undefined;
+  const timeoutSettings = stateResult?.submissionTimeout;
+  const remainingMs =
+    phaseObservedAtRef.current && timeoutSettings?.enabled
+      ? Math.max(0, timeoutSettings.timeoutMs - (now - phaseObservedAtRef.current.observedAt))
+      : undefined;
 
   const unsubmitted = stateResult
     ? computeUnsubmittedParticipants(slots, stateResult.unsubmittedParticipantIds, stateResult.state.currentPhase)
@@ -130,6 +136,7 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl }: Pr
             현재 단계: <strong>{PHASE_LABELS[stateResult.state.currentPhase]}</strong> ({stateResult.state.currentRound}
             라운드)
           </p>
+          {timeoutSettings && !timeoutSettings.enabled && <p>제출 제한시간: 사용 안 함</p>}
           {remainingMs !== undefined && <p>남은 시간(추정): {Math.ceil(remainingMs / 1000)}초</p>}
           <p>
             제출 현황:{" "}

@@ -240,6 +240,13 @@ async function handleState(sessionId: string, query: Readonly<Record<string, str
       state,
       unsubmittedParticipantIds: entry.session.getUnsubmittedParticipantIds(),
       gameOver: state.currentRound > state.config.totalRounds,
+      // 구매 매칭 알고리즘 재설계 Stage 2(D-036)에서 세션별 제출 타임아웃이 생겼는데,
+      // `GET /state` 응답이 이 값을 노출하지 않아 `NetworkSessionMonitor.tsx`(확인용 화면)가
+      // 여전히 고정 상수 `DEFAULT_SUBMISSION_TIMEOUT_MS`(120초)로만 카운트다운을 그려
+      // 교사가 커스텀 시간을 설정하거나 타임아웃을 꺼도 화면에는 반영되지 않던 버그를
+      // 실제 브라우저 다인원 검증 중 발견해 함께 고쳤다 — 서버가 실제 세션 설정을 그대로
+      // 실어 보낸다.
+      submissionTimeout: entry.session.getSubmissionTimeoutSettings(),
       lobby: {
         open: lobbyOpen,
         unsubmittedPlayerIds: lobbyOpen

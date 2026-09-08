@@ -34,6 +34,9 @@ export interface StateResult {
   unsubmittedParticipantIds: ParticipantId[];
   gameOver: boolean;
   lobby: { open: boolean; unsubmittedPlayerIds: string[] };
+  /** 이 세션에 실제로 적용 중인 제출 타임아웃 설정 (D-036). `NetworkSessionMonitor.tsx`가
+   * 고정 상수 대신 이 값으로 카운트다운/활성 여부를 표시한다. */
+  submissionTimeout: SubmissionTimeoutSettings;
 }
 
 export type PollResult = StateResult | { unchanged: true };

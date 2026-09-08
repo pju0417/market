@@ -601,6 +601,33 @@ describe("submission timeout and force-advance (Milestone 4 3단계, D-029)", ()
     },
   );
 
+  it(
+    "GET /state exposes the session's actual submissionTimeout settings (실제 다인원 브라우저 검증 중 발견 — " +
+      "NetworkSessionMonitor.tsx가 고정 상수 DEFAULT_SUBMISSION_TIMEOUT_MS로만 카운트다운을 그려 " +
+      "커스텀 타임아웃/비활성화가 화면에 반영되지 않던 버그의 서버 쪽 원인)",
+    async () => {
+      const customTimeoutMs = 5_000;
+      const { sessionId: customSessionId } = await createTestSession(2, {
+        submissionTimeoutMs: customTimeoutMs,
+        submissionTimeoutEnabled: true,
+      });
+      const customState = await handleApiRequest(
+        req({ method: "GET", path: `/api/sessions/${customSessionId}/state` }),
+      );
+      expect(
+        (customState.body as { submissionTimeout: { enabled: boolean; timeoutMs: number } }).submissionTimeout,
+      ).toEqual({ enabled: true, timeoutMs: customTimeoutMs, npcGraduatedEntryEnabled: true });
+
+      const { sessionId: disabledSessionId } = await createTestSession(2, { submissionTimeoutEnabled: false });
+      const disabledState = await handleApiRequest(
+        req({ method: "GET", path: `/api/sessions/${disabledSessionId}/state` }),
+      );
+      expect(
+        (disabledState.body as { submissionTimeout: { enabled: boolean } }).submissionTimeout.enabled,
+      ).toBe(false);
+    },
+  );
+
   it("does not reset phaseStartedAt on partial/repeated submissions (cannot be used to extend other players' deadline)", async () => {
     const { sessionId } = await createTestSession(2);
     const entry = getSession(sessionId);
