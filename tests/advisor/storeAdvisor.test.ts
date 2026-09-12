@@ -739,4 +739,36 @@ describe("analyzeStoreTurn", () => {
       expectWellFormedAdvice(advice);
     });
   });
+
+  describe("specialtyFocusMinRound (Milestone 6 제안 B 1단계: 5라운드부터 전문화 경쟁 전략 안내 문구)", () => {
+    it("does not mention specialty as a competitive strategy before the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 4 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("전문화도 경쟁 전략"))).toBe(false);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("mentions specialty as a competitive strategy exactly at the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 5 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("전문화도 경쟁 전략"))).toBe(true);
+      expectWellFormedAdvice(advice);
+    });
+
+    it("keeps mentioning specialty as a competitive strategy well after the threshold round", () => {
+      const store = makeStore();
+      const state = makeState({ stores: { s1: store }, currentRound: 7 });
+
+      const advice = analyzeStoreTurn(state, "s1");
+
+      expect(advice.situationSummary.some((line) => line.includes("전문화도 경쟁 전략"))).toBe(true);
+      expectWellFormedAdvice(advice);
+    });
+  });
 });

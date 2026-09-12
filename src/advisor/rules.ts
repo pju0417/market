@@ -130,6 +130,14 @@ export interface AdvisorRules {
    * 가격/품질 결정(D-022)을 바라보는 관점만 짚어준다.
    */
   competitionFocusMinRound: number;
+  /**
+   * 이 라운드부터 가게 턴 비서가 "전문화도 경쟁 전략의 한 축"이라는 안내 문장을
+   * situationSummary에 추가한다. docs/ROUND_FLOW.md의 5라운드 커리큘럼("전문화") 단계에
+   * 맞춘 값이며, economy/config.ts의 MIN_ROUND_FOR_INDUSTRY_ACTIONS(전문 업종 이탈 판매가
+   * 실제로 가능해지는 라운드, D-033)와는 무관하다 — 이미 4라운드부터 가능했던 전문 업종
+   * 유지/이탈 선택을 "경쟁 전략"의 관점으로 짚어줄 뿐, 새 메커니즘을 열거나 잠그지 않는다.
+   */
+  specialtyFocusMinRound: number;
 }
 
 export const DEFAULT_ADVISOR_RULES: AdvisorRules = {
@@ -154,4 +162,5 @@ export const DEFAULT_ADVISOR_RULES: AdvisorRules = {
   householdHighBudgetUsageRatio: 0.9,
   householdLowBudgetUsageRatio: 0.2,
   competitionFocusMinRound: 5,
+  specialtyFocusMinRound: 5,
 };

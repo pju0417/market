@@ -122,6 +122,13 @@ export function analyzeStoreTurn(
     situationSummary.push("아직 전문 업종을 정하지 않았습니다.");
   }
 
+  if (state.currentRound >= rules.specialtyFocusMinRound) {
+    situationSummary.push(
+      `${rules.specialtyFocusMinRound}라운드부터는 전문화도 경쟁 전략의 한 축입니다. 전문 업종을 계속 지키면 소비자 매력도 페널티 없이 안정적으로 판매할 수 있고, ` +
+        "다른 업종으로 이탈하면 다른 시장 상황을 노려볼 수 있지만 소비자 매력도 페널티가 적용됩니다.",
+    );
+  }
+
   const district = DISTRICTS[store.districtId];
   situationSummary.push(
     `현재 상권(${DISTRICT_NAMES_KO[store.districtId]})의 임대료 배율은 ${district.rentMultiplier.toFixed(1)}배입니다 ` +
