@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
-import { industrySwitchCost, MIN_ROUND_FOR_INDUSTRY_ACTIONS, NPC_STORE_SPECIALTY_DEVIATION_RULES } from "../../src/economy/config.js";
 import {
+  COSTS,
+  industrySwitchCost,
+  MIN_ROUND_FOR_ADVERTISING,
+  MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+  NPC_STORE_SPECIALTY_DEVIATION_RULES,
+} from "../../src/economy/config.js";
+import {
+  resolveCompanyAdvertising,
   resolveCompanyDecision,
   resolveCompanyIndustrySwitch,
   resolveHouseholdPurchases,
   resolveSingleCategoryPurchase,
+  resolveStoreAdvertising,
   resolveStoreCategorySwitch,
   resolveStorePurchases,
   type CategoryPurchaseRequest,
@@ -28,6 +36,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
     lastIndustrySwitchRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }
@@ -46,6 +55,7 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     inventoryQuality: 0,
     retailPrice: 0,
     lastSellingCategoryChangeRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }
@@ -672,5 +682,130 @@ describe("resolveStoreCategorySwitch (Milestone 6, D-033)", () => {
 
     expect(store.currentSellingCategoryId).toBe("electronics");
     expect(store.lastSellingCategoryChangeRound).toBe(afterCooldownRound);
+  });
+});
+
+describe("resolveCompanyAdvertising / resolveStoreAdvertising (Milestone 6, D-040)", () => {
+  it("resolveCompanyAdvertising treats an omitted field as 'no advertising' (no charge)", () => {
+    const company = makeCompany({ ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING, undefined);
+
+    expect(company.isAdvertisingActive).toBe(false);
+    expect(company.ledger.cash).toBe(1000);
+  });
+
+  it("resolveCompanyAdvertising treats false the same as omitted", () => {
+    const company = makeCompany({ ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING, false);
+
+    expect(company.isAdvertisingActive).toBe(false);
+    expect(company.ledger.cash).toBe(1000);
+  });
+
+  it("resolveCompanyAdvertising charges exactly advertisingCostPerRound and sets the flag when true", () => {
+    const company = makeCompany({ ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING, true);
+
+    expect(company.isAdvertisingActive).toBe(true);
+    expect(company.ledger.cash).toBe(1000 - COSTS.advertisingCostPerRound);
+  });
+
+  it("resolveStoreAdvertising follows the same omitted/false/true contract", () => {
+    const storeOmitted = makeStore({ ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveStoreAdvertising(storeOmitted, MIN_ROUND_FOR_ADVERTISING, undefined);
+    expect(storeOmitted.isAdvertisingActive).toBe(false);
+    expect(storeOmitted.ledger.cash).toBe(1000);
+
+    const storeTrue = makeStore({ ledger: { cash: 1000, cumulativeProfit: 0 } });
+    resolveStoreAdvertising(storeTrue, MIN_ROUND_FOR_ADVERTISING, true);
+    expect(storeTrue.isAdvertisingActive).toBe(true);
+    expect(storeTrue.ledger.cash).toBe(1000 - COSTS.advertisingCostPerRound);
+  });
+});
+
+describe("resolveSingleCategoryPurchase advertising handling (Milestone 6, D-040)", () => {
+  // food/toys reference prices: CATEGORY_UNIT_COST(4/8) * REFERENCE_PRICE_MULTIPLIER(2.2) = 8.8/17.6.
+  const wholesaleCandidates: WholesaleListing[] = [
+    { id: "w-food", companyId: "co-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+    { id: "w-toys", companyId: "co-b", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 17.6 },
+  ];
+  const advertisingWholesaleCompanies: Record<string, CompanyState> = {
+    "co-a": makeCompany({ id: "co-a", ownerId: "student-2" }),
+    "co-b": makeCompany({ id: "co-b", ownerId: "student-3", isAdvertisingActive: true }),
+  };
+
+  const retailCandidates: RetailListing[] = [
+    { id: "r-food", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+    { id: "r-toys", storeId: "store-b", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 17.6 },
+  ];
+  const advertisingRetailStores: Record<string, StoreState> = {
+    "store-a": makeStore({ id: "store-a", ownerId: "student-2", specialtyCategoryId: null }),
+    "store-b": makeStore({ id: "store-b", ownerId: "student-3", specialtyCategoryId: null, isAdvertisingActive: true }),
+  };
+
+  it("wholesale: a listing from an advertising company scores exactly ADVERTISING_PRIORITY_BONUS higher (D-039의 도매 면역과 달리, 광고는 도매에도 적용된다)", () => {
+    const request = storeRequest({ maxQuantity: 1, autoFillPreference: "quality" });
+
+    const decision = resolveSingleCategoryPurchase(
+      wholesaleCandidates,
+      advertisingWholesaleCompanies,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+    );
+
+    // Both listings are otherwise identical (same normalized price/quality), so without the
+    // bonus the winner is decided purely by the tiny tie-break, but with the 0.1 bonus (which
+    // exceeds the max possible tie-break spread of 0.02) the advertising company (co-b/toys)
+    // must win deterministically.
+    expect(decision.purchases[0]!.listingId).toBe("w-toys");
+  });
+
+  it("retail: a listing from an advertising store scores exactly ADVERTISING_PRIORITY_BONUS higher", () => {
+    const request = categoryRequest({ categoryId: "food", maxQuantity: 1, autoFillPreference: "quality" });
+
+    const decision = resolveSingleCategoryPurchase(
+      retailCandidates,
+      advertisingRetailStores,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+    );
+
+    expect(decision.purchases[0]!.listingId).toBe("r-toys");
+  });
+
+  it("regression: with no advertising sellers, results are identical to the pre-advertising behavior", () => {
+    const neutralCompanies: Record<string, CompanyState> = {
+      "co-a": makeCompany({ id: "co-a", ownerId: "student-2" }),
+      "co-b": makeCompany({ id: "co-b", ownerId: "student-3" }),
+    };
+    const request = storeRequest({ maxQuantity: 1, autoFillPreference: "quality" });
+
+    const withNeutralCompanies = resolveSingleCategoryPurchase(
+      wholesaleCandidates,
+      neutralCompanies,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+    );
+    const withoutAdjustmentArg = resolveSingleCategoryPurchase(
+      wholesaleCandidates,
+      neutralCompanies,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+      undefined,
+    );
+
+    expect(withNeutralCompanies).toEqual(withoutAdjustmentArg);
   });
 });

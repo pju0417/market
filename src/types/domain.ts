@@ -73,6 +73,13 @@ export interface CompanyState {
    * null. NPC 전환 쿨다운(docs/DECISIONS.md D-033) 판단에 쓰인다.
    */
   lastIndustrySwitchRound: number | null;
+  /**
+   * 이번 라운드 광고 신청 여부 (Milestone 6, docs/DECISIONS.md D-040). 매 라운드 새로
+   * 신청해야 하는 "이번 라운드 상태"다 — switchToCategoryId류 "결정"이 아니라, 매 라운드
+   * 해당 참여자의 턴 처리 시작 시 먼저 false로 리셋한 뒤 이번 라운드 결정에 따라 세팅한다
+   * (src/economy/advertising.ts의 applyAdvertisingDecision 참고).
+   */
+  isAdvertisingActive: boolean;
 }
 
 export interface StoreState {
@@ -104,6 +111,11 @@ export interface StoreState {
    * 않았으면 null. 사람/NPC 모두 동일한 쿨다운 판단에 쓰인다 (docs/DECISIONS.md D-033).
    */
   lastSellingCategoryChangeRound: number | null;
+  /**
+   * 이번 라운드 광고 신청 여부 (Milestone 6, docs/DECISIONS.md D-040). CompanyState의 동명
+   * 필드와 같은 원칙 — 매 라운드 재부과된다.
+   */
+  isAdvertisingActive: boolean;
 }
 
 export interface HouseholdState {

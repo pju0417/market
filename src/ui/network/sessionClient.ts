@@ -70,6 +70,8 @@ export interface CompanyDecisionInput {
   wholesalePrice: number;
   /** 업종 전환 요청 (Milestone 6). 생략하면 "전환하지 않기로 선택"으로 취급된다. */
   switchToCategoryId?: ProductCategoryId;
+  /** 광고 신청 (Milestone 6, docs/DECISIONS.md D-040). 생략/false면 "광고 안 함". */
+  advertise?: boolean;
 }
 
 export interface StoreDecisionInput {
@@ -78,6 +80,8 @@ export interface StoreDecisionInput {
   retailPrice?: number;
   /** 판매 카테고리 변경 요청 (Milestone 6). 생략하면 "변경하지 않기로 선택"으로 취급된다. */
   sellingCategoryId?: ProductCategoryId;
+  /** 광고 신청 (Milestone 6, docs/DECISIONS.md D-040). 생략/false면 "광고 안 함". */
+  advertise?: boolean;
 }
 
 export type FetchLike = typeof fetch;

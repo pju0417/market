@@ -15,6 +15,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
     lastIndustrySwitchRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }
@@ -33,6 +34,7 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     inventoryQuality: 0,
     retailPrice: 0,
     lastSellingCategoryChangeRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }

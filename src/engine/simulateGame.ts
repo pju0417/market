@@ -24,9 +24,11 @@ import { computeCategoryClearingSummary } from "../economy/marketStats.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
 import {
+  resolveCompanyAdvertising,
   resolveCompanyDecision,
   resolveCompanyIndustrySwitch,
   resolveHouseholdPurchases,
+  resolveStoreAdvertising,
   resolveStoreCategorySwitch,
   resolveStorePurchases,
   type CategoryPurchaseRequest,
@@ -34,8 +36,10 @@ import {
   type StorePurchaseRequest,
 } from "../economy/humanDecisions.js";
 import {
+  decideCompanyAdvertising,
   decideCompanyIndustrySwitch,
   decideCompanyMarketEventSwitch,
+  decideStoreAdvertising,
   decideStorePurchases,
   decideStoreSpecialtyDeviation,
 } from "../npc/decisions.js";
@@ -97,6 +101,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       inventoryQuantity: 0,
       lastWholesalePrice: 0,
       lastIndustrySwitchRound: null,
+      isAdvertisingActive: false,
     };
 
     stores[storeId] = {
@@ -112,6 +117,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       inventoryQuality: 0,
       retailPrice: 0,
       lastSellingCategoryChangeRound: null,
+      isAdvertisingActive: false,
     };
 
     households[householdId] = {
@@ -141,6 +147,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       inventoryQuantity: 0,
       lastWholesalePrice: 0,
       lastIndustrySwitchRound: null,
+      isAdvertisingActive: false,
     };
   });
 
@@ -159,6 +166,7 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
       inventoryQuality: 0,
       retailPrice: 0,
       lastSellingCategoryChangeRound: null,
+      isAdvertisingActive: false,
     };
   });
 
@@ -268,6 +276,12 @@ export interface StoreDecisionInput {
    * 경우에만 봇 전환 로직이 대신 실행된다).
    */
   sellingCategoryId?: ProductCategoryId;
+  /**
+   * 학생이 이번 라운드 광고를 신청하고 싶을 때만 넣는다 (Milestone 6, docs/DECISIONS.md
+   * D-040). 생략하거나 false면 "광고 안 함"이며, MIN_ROUND_FOR_ADVERTISING 미만이면 어차피
+   * 무시된다.
+   */
+  advertise?: boolean;
 }
 
 /**
@@ -396,6 +410,17 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         company.productCategoryId !== null
           ? marketEventCostMultiplierFor(company.productCategoryId, marketEvent)
           : 1;
+
+      // 광고(Milestone 6, docs/DECISIONS.md D-040)는 업종 전환 다음, 생산 결정보다 먼저
+      // 처리한다 — resolveCompanyDecision이 광고비 차감 "이후"의 company.ledger.cash를 읽어야
+      // 생산량 계산에 광고비가 반영된다(순서가 핵심, D-033류 재발 방지). chargeDiscretionary가
+      // 원장을 직접 mutate하므로 별도로 값을 전달할 필요는 없다.
+      if (humanInput === undefined) {
+        decideCompanyAdvertising(company, state.currentRound);
+      } else {
+        resolveCompanyAdvertising(company, state.currentRound, humanInput.advertise);
+      }
+
       const decision = resolveCompanyDecision(company, company.ledger.cash, humanInput, rng, costMultiplier);
       if (decision === null || decision.quantity <= 0) continue;
 
@@ -454,6 +479,15 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         resolveStoreCategorySwitch(store, state.currentRound, requested.sellingCategoryId);
       }
 
+      // 광고(Milestone 6, docs/DECISIONS.md D-040)는 판매 카테고리 변경 다음, 매입 결정보다
+      // 먼저 처리한다 — 기업 턴과 같은 순서 원칙(광고비 차감 이후의 store.ledger.cash를
+      // 매입 예산으로 쓴다).
+      if (requested === undefined) {
+        decideStoreAdvertising(store, state.currentRound);
+      } else {
+        resolveStoreAdvertising(store, state.currentRound, requested.advertise);
+      }
+
       const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
       // 봇 위임 여부는 requested(=이 가게의 StoreDecisionInput) 자체가 undefined인지로만
       // 판단한다 — requested가 있는데 purchaseRequest만 비어 있으면(사람이 실제로 제출했지만
@@ -461,7 +495,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       // 위임하지 않는다 (구매 매칭 알고리즘 재설계 Stage 1, 계약 정정).
       const decision =
         requested === undefined
-          ? decideStorePurchases(store, store.ledger.cash, eligible, rng)
+          ? decideStorePurchases(store, store.ledger.cash, eligible, state.companies, rng)
           : resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested.purchaseRequest, rng);
 
       let totalCost = 0;

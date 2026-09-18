@@ -23,6 +23,7 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     inventoryQuality: 0.5,
     retailPrice: 20,
     lastSellingCategoryChangeRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }

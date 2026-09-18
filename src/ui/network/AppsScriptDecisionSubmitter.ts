@@ -20,10 +20,16 @@ export class AppsScriptDecisionSubmitter implements DecisionSubmitter {
   }
 
   async submitStoreDecision(storeId: ParticipantId, input: StoreDecisionInput): Promise<void> {
-    const payload: { purchaseRequest?: StorePurchaseRequest; retailPrice?: number; sellingCategoryId?: ProductCategoryId } = {};
+    const payload: {
+      purchaseRequest?: StorePurchaseRequest;
+      retailPrice?: number;
+      sellingCategoryId?: ProductCategoryId;
+      advertise?: boolean;
+    } = {};
     if (input.purchaseRequest !== undefined) payload.purchaseRequest = input.purchaseRequest;
     if (input.retailPrice !== undefined) payload.retailPrice = input.retailPrice;
     if (input.sellingCategoryId !== undefined) payload.sellingCategoryId = input.sellingCategoryId;
+    if (input.advertise !== undefined) payload.advertise = input.advertise;
     await this.client.submitStore(this.sessionId, this.token, storeId, payload);
   }
 

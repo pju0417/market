@@ -164,6 +164,7 @@ describe("turnCalculations", () => {
         inventoryQuantity: 0,
         lastWholesalePrice: 10,
         lastIndustrySwitchRound: null,
+        isAdvertisingActive: false,
       },
     };
 
@@ -211,6 +212,7 @@ describe("turnCalculations", () => {
           inventoryQuality: 0,
           retailPrice: 0,
           lastSellingCategoryChangeRound: null,
+          isAdvertisingActive: false,
         },
       };
       const request = { categoryId: "food" as const, priorityPicks: [], maxQuantity: 1, autoFillPreference: "quality" as const };
@@ -250,6 +252,7 @@ describe("turnCalculations", () => {
         inventoryQuality: 0,
         retailPrice: 0,
         lastSellingCategoryChangeRound: null,
+        isAdvertisingActive: false,
       },
     };
     const household = {

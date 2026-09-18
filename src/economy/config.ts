@@ -164,6 +164,11 @@ export const COSTS = {
   /** 가게가 전문 업종과 다른 카테고리를 팔 때 소비자 매력도에서 차감되는 최대 페널티. */
   storeSpecialtyMismatchPenalty: 0.35,
   householdBudgetPerRound: 100,
+  /**
+   * 광고(Milestone 6, docs/DECISIONS.md D-040) 라운드당 비용. 기업(도매)/가게(소매) 공통이며,
+   * 매 라운드 재부과된다(신청 안 하면 다음 라운드에 자동으로 꺼진다).
+   */
+  advertisingCostPerRound: 20,
 };
 
 export interface CompanyStrategyPreset {
@@ -173,14 +178,19 @@ export interface CompanyStrategyPreset {
   qualityTarget: number;
   /** 생산단가 대비 도매가 배율. */
   priceMarkup: number;
+  /**
+   * 광고 성향 (Milestone 6, docs/DECISIONS.md D-040). NPC는 rng 없이 이 값 그대로(자금이
+   * 되는 한) 광고 여부를 결정한다 — src/npc/decisions.ts의 decideCompanyAdvertising 참고.
+   */
+  advertises: boolean;
 }
 
 export const COMPANY_STRATEGY_PRESETS: Record<StrategyId, CompanyStrategyPreset> = {
-  stable: { quantityMultiplier: 1.0, qualityTarget: 0.5, priceMarkup: 1.3 },
-  "low-cost": { quantityMultiplier: 1.3, qualityTarget: 0.35, priceMarkup: 1.1 },
-  premium: { quantityMultiplier: 0.7, qualityTarget: 0.85, priceMarkup: 1.6 },
-  aggressive: { quantityMultiplier: 1.5, qualityTarget: 0.55, priceMarkup: 1.15 },
-  conservative: { quantityMultiplier: 0.6, qualityTarget: 0.5, priceMarkup: 1.4 },
+  stable: { quantityMultiplier: 1.0, qualityTarget: 0.5, priceMarkup: 1.3, advertises: false },
+  "low-cost": { quantityMultiplier: 1.3, qualityTarget: 0.35, priceMarkup: 1.1, advertises: false },
+  premium: { quantityMultiplier: 0.7, qualityTarget: 0.85, priceMarkup: 1.6, advertises: true },
+  aggressive: { quantityMultiplier: 1.5, qualityTarget: 0.55, priceMarkup: 1.15, advertises: true },
+  conservative: { quantityMultiplier: 0.6, qualityTarget: 0.5, priceMarkup: 1.4, advertises: false },
 };
 
 export interface StoreStrategyPreset {
@@ -190,14 +200,16 @@ export interface StoreStrategyPreset {
   priceMarkup: number;
   /** 공급처 선택 시 가격 대비 품질에 두는 가중치 (0=가격만, 1=품질만). */
   qualityWeight: number;
+  /** 광고 성향 (Milestone 6, docs/DECISIONS.md D-040). CompanyStrategyPreset과 같은 원칙. */
+  advertises: boolean;
 };
 
 export const STORE_STRATEGY_PRESETS: Record<StrategyId, StoreStrategyPreset> = {
-  stable: { purchaseQuantityMultiplier: 1.0, priceMarkup: 1.4, qualityWeight: 0.5 },
-  "low-cost": { purchaseQuantityMultiplier: 1.3, priceMarkup: 1.2, qualityWeight: 0.2 },
-  premium: { purchaseQuantityMultiplier: 0.7, priceMarkup: 1.8, qualityWeight: 0.85 },
-  aggressive: { purchaseQuantityMultiplier: 1.5, priceMarkup: 1.15, qualityWeight: 0.35 },
-  conservative: { purchaseQuantityMultiplier: 0.6, priceMarkup: 1.5, qualityWeight: 0.5 },
+  stable: { purchaseQuantityMultiplier: 1.0, priceMarkup: 1.4, qualityWeight: 0.5, advertises: false },
+  "low-cost": { purchaseQuantityMultiplier: 1.3, priceMarkup: 1.2, qualityWeight: 0.2, advertises: false },
+  premium: { purchaseQuantityMultiplier: 0.7, priceMarkup: 1.8, qualityWeight: 0.85, advertises: true },
+  aggressive: { purchaseQuantityMultiplier: 1.5, priceMarkup: 1.15, qualityWeight: 0.35, advertises: true },
+  conservative: { purchaseQuantityMultiplier: 0.6, priceMarkup: 1.5, qualityWeight: 0.5, advertises: false },
 };
 
 export interface HouseholdStrategyPreset {
@@ -315,6 +327,20 @@ export const TREND_EVENT_PRIORITY_BONUS = 0.1;
  * 않아야 한다.
  */
 export const TREND_EVENT_RNG_SEED_OFFSET = 70021;
+
+/**
+ * 광고(Milestone 6, docs/DECISIONS.md D-040)가 실제로 신청 가능해지는 라운드. 4라운드까지는
+ * UI에 체크박스 자체가 안 보이고, 서버(applyAdvertisingDecision)도 이 라운드 미만의 신청은
+ * 무시한다.
+ */
+export const MIN_ROUND_FOR_ADVERTISING = 5;
+
+/**
+ * 광고 중인 판매자(기업/가게)의 매물이 scoreListingForBuyer의 scoreAdjustment에서 받는 가산점
+ * (Milestone 6, docs/DECISIONS.md D-040). 유행 이벤트(TREND_EVENT_PRIORITY_BONUS)와 달리 도매
+ * 매입 스코어링에도 그대로 적용된다 — src/economy/advertising.ts의 advertisingScoreBonus 참고.
+ */
+export const ADVERTISING_PRIORITY_BONUS = 0.1;
 
 export const NPC_TARGETS = {
   /** 카테고리 하나당 최소 몇 개 기업(학생+NPC 합계)이 있어야 하는가. */

@@ -22,6 +22,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     inventoryQuantity: 0,
     lastWholesalePrice: 10,
     lastIndustrySwitchRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }

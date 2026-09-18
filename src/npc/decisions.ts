@@ -22,6 +22,7 @@ import {
   specialtyMismatchPenalty,
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
+import { advertisingScoreBonus, applyAdvertisingDecision } from "../economy/advertising.js";
 import { estimateCategoryMargin, computeCategoryAverages } from "../economy/marketStats.js";
 import { countRemainingMarketEventRounds, type ActiveMarketEvent } from "../economy/marketEvents.js";
 import { trendPriorityBonusFor, type ActiveTrendEvent } from "../economy/trendEvent.js";
@@ -223,6 +224,21 @@ export function decideCompanyMarketEventSwitch(
   company.lastIndustrySwitchRound = state.currentRound;
 }
 
+/**
+ * NPC 기업의 광고 결정 (Milestone 6, docs/DECISIONS.md D-040). rng 없이 전략 프리셋의
+ * `advertises` 이진 성향을 그대로 따르는 결정론적 결정이다 — aggressive/premium은 자금이
+ * 되는 한 항상 광고하고, 나머지는 안 한다(비용/라운드 게이트는 applyAdvertisingDecision이
+ * 처리한다).
+ */
+export function decideCompanyAdvertising(company: CompanyState, currentRound: number): void {
+  applyAdvertisingDecision(company, currentRound, COMPANY_STRATEGY_PRESETS[company.strategyId].advertises);
+}
+
+/** 가게 버전 — decideCompanyAdvertising과 동일한 원칙. */
+export function decideStoreAdvertising(store: StoreState, currentRound: number): void {
+  applyAdvertisingDecision(store, currentRound, STORE_STRATEGY_PRESETS[store.strategyId].advertises);
+}
+
 export interface PurchaseLine {
   listingId: string;
   quantity: number;
@@ -235,12 +251,16 @@ export interface StorePurchaseDecision {
 
 /**
  * eligibleListings는 이미 자기 거래 금지(D-005) 필터를 적용한 상태여야 한다
- * (src/economy/market.ts의 eligibleWholesaleListingsForStore 참고).
+ * (src/economy/market.ts의 eligibleWholesaleListingsForStore 참고). `companies`는 매물의 실제
+ * 판매 기업을 조회해 광고 가산점(advertisingScoreBonus, Milestone 6, docs/DECISIONS.md D-040)을
+ * 판단하는 데 쓴다 — 이 함수는 도매 매입 함수 중 유일하게 판매자 상태를 조회하지 않던
+ * 함수였다.
  */
 export function decideStorePurchases(
   store: StoreState,
   availableCash: number,
   eligibleListings: readonly WholesaleListing[],
+  companies: Readonly<Record<ParticipantId, CompanyState>>,
   rng: Rng,
 ): StorePurchaseDecision {
   const preset = STORE_STRATEGY_PRESETS[store.strategyId];
@@ -252,9 +272,10 @@ export function decideStorePurchases(
   const candidates = eligibleListings.filter(
     (listing) => listing.categoryId === sellingCategoryId && listing.quantityAvailable > 0,
   );
-  const purchases = allocateCategoryPurchase(candidates, targetQuantity, Infinity, availableCash, rng, (listing) =>
-    scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, preset.qualityWeight, rng),
-  );
+  const purchases = allocateCategoryPurchase(candidates, targetQuantity, Infinity, availableCash, rng, (listing) => {
+    const adjustment = advertisingScoreBonus(companies[listing.companyId]?.isAdvertisingActive ?? false);
+    return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, preset.qualityWeight, rng, adjustment);
+  });
 
   return { purchases };
 }
@@ -360,7 +381,10 @@ export function decideHouseholdPurchases(
         listing.categoryId,
         qualityWeight,
         rng,
-        priorityBonus - mismatchPenalty + trendPriorityBonusFor(listing.categoryId, trendEvent),
+        priorityBonus -
+          mismatchPenalty +
+          trendPriorityBonusFor(listing.categoryId, trendEvent) +
+          advertisingScoreBonus(sellingStore?.isAdvertisingActive ?? false),
       );
     },
   );
@@ -378,8 +402,9 @@ export function decideHouseholdPurchases(
  * - 가게의 전문 업종 이탈 판매 매력도 페널티(specialtyMismatchPenalty, Milestone 6,
  *   docs/DECISIONS.md D-033): household.kind와 무관하게 적용된다.
  * - 유행 이벤트 가산점(trendPriorityBonusFor, Milestone 6 제안 C, docs/DECISIONS.md D-039):
- *   household.kind와 무관하게 적용된다.
- * decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상 기본값 0으로 호출된다.
+ *   household.kind와 무관하게 적용된다. decideStorePurchases(도매 매입)에는 적용되지 않는다.
+ * - 광고 가산점(advertisingScoreBonus, Milestone 6, docs/DECISIONS.md D-040): 유행 이벤트와
+ *   달리 decideStorePurchases(도매 매입)에도 적용된다 — 도매/소매 양쪽 모두 대상이다.
  */
 export function scoreListingForBuyer(
   price: number,

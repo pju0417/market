@@ -1,6 +1,13 @@
 import { useMemo, useState } from "react";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
-import { companyUnitCost, industrySwitchCost, MIN_ROUND_FOR_INDUSTRY_ACTIONS, PRODUCT_CATEGORIES } from "../../economy/config.js";
+import {
+  companyUnitCost,
+  COSTS,
+  industrySwitchCost,
+  MIN_ROUND_FOR_ADVERTISING,
+  MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+  PRODUCT_CATEGORIES,
+} from "../../economy/config.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../../economy/marketEvents.js";
 import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { CompanyState, GameState, ProductCategoryId } from "../../types/domain.js";
@@ -40,6 +47,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>(undefined);
   const [switchToCategoryId, setSwitchToCategoryId] = useState<ProductCategoryId | "">("");
+  const [advertise, setAdvertise] = useState(false);
 
   const canSwitchIndustry = state.currentRound >= MIN_ROUND_FOR_INDUSTRY_ACTIONS;
   const willSwitchIndustry = switchToCategoryId !== "" && switchToCategoryId !== company.productCategoryId;
@@ -66,10 +74,19 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
     ? companyUnitCost(effectiveProductCategoryId, company.districtId) * costMultiplier
     : 0;
   const cashAfterSwitch = Math.max(0, availableCash - switchCost);
-  const maxAffordable = computeMaxAffordable(cashAfterSwitch, unitCost);
+
+  // 서버(runCompanyTurn)는 업종 전환 다음, 생산 결정보다 먼저 광고비를 차감한다(Milestone 6,
+  // docs/DECISIONS.md D-040) — 미리보기도 같은 순서로 계산해야 실제 제출 결과와 어긋나지
+  // 않는다(D-033류 재발 방지).
+  const canAdvertise = state.currentRound >= MIN_ROUND_FOR_ADVERTISING;
+  const adCost = canAdvertise && advertise ? COSTS.advertisingCostPerRound : 0;
+  const adUnaffordable = adCost > 0 && adCost > cashAfterSwitch;
+  const cashAfterAd = Math.max(0, cashAfterSwitch - (adUnaffordable ? 0 : adCost));
+
+  const maxAffordable = computeMaxAffordable(cashAfterAd, unitCost);
 
   const productionCost = useMemo(() => computeProductionCost(quantity, unitCost), [quantity, unitCost]);
-  const overBudget = isOverBudget(productionCost, cashAfterSwitch);
+  const overBudget = isOverBudget(productionCost, cashAfterAd);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- state는 제자리에서 mutate되어 참조가 안 바뀌므로, 실제 변경 감지는 session의 version 카운터로 한다.
   const advice = useMemo(() => analyzeCompanyTurn(state, company.id), [version, company.id]);
 
@@ -138,6 +155,18 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         </div>
       )}
 
+      {canAdvertise && (
+        <div className="field">
+          <label className="field-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={advertise} onChange={(e) => setAdvertise(e.target.checked)} />
+            광고하기 (라운드당 {formatWon(COSTS.advertisingCostPerRound)}, 도매 매입 우선순위가 올라가요)
+          </label>
+          {adUnaffordable && (
+            <p style={{ color: "#dc2626", fontSize: 14 }}>광고비가 가진 돈보다 많아 광고할 수 없어요.</p>
+          )}
+        </div>
+      )}
+
       <label className="field">
         <span className="field-label">생산량 (최대 {maxAffordable}개까지 살 수 있어요)</span>
         <input
@@ -175,12 +204,16 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
 
       <button
         className="primary"
-        disabled={disabled || overBudget || company.productCategoryId === null || switchUnaffordable}
+        disabled={disabled || overBudget || company.productCategoryId === null || switchUnaffordable || adUnaffordable}
         onClick={() => {
           setSubmitError(undefined);
-          const input = willSwitchIndustry
-            ? { quantity, quality, wholesalePrice, switchToCategoryId: switchToCategoryId as ProductCategoryId }
-            : { quantity, quality, wholesalePrice };
+          const input = {
+            quantity,
+            quality,
+            wholesalePrice,
+            ...(willSwitchIndustry ? { switchToCategoryId: switchToCategoryId as ProductCategoryId } : {}),
+            ...(advertise ? { advertise: true } : {}),
+          };
           Promise.resolve(session.submitCompanyDecision(company.id, input))
             .then(() => onSubmitted())
             .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));

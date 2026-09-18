@@ -1,18 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../../src/economy/rng.js";
 import {
+  ALL_STRATEGIES,
+  COMPANY_STRATEGY_PRESETS,
   companyUnitCost,
+  COSTS,
   industrySwitchCost,
+  MIN_ROUND_FOR_ADVERTISING,
   MIN_ROUND_FOR_INDUSTRY_ACTIONS,
   NPC_INDUSTRY_SWITCH_RULES,
   NPC_STORE_SPECIALTY_DEVIATION_RULES,
   specialtyMismatchPenalty,
+  STORE_STRATEGY_PRESETS,
 } from "../../src/economy/config.js";
+import { advertisingScoreBonus } from "../../src/economy/advertising.js";
 import {
+  decideCompanyAdvertising,
   decideCompanyIndustrySwitch,
   decideCompanyMarketEventSwitch,
   decideCompanyProduction,
   decideHouseholdPurchases,
+  decideStoreAdvertising,
   decideStorePurchases,
   decideStoreSpecialtyDeviation,
   scoreListingForBuyer,
@@ -42,6 +50,7 @@ function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
     inventoryQuantity: 0,
     lastWholesalePrice: 0,
     lastIndustrySwitchRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }
@@ -60,6 +69,7 @@ function makeStore(overrides: Partial<StoreState> = {}): StoreState {
     inventoryQuality: 0,
     retailPrice: 0,
     lastSellingCategoryChangeRound: null,
+    isAdvertisingActive: false,
     ...overrides,
   };
 }
@@ -679,7 +689,7 @@ describe("decideStorePurchases", () => {
     ];
     const rng = createRng(1);
 
-    const decision = decideStorePurchases(store, 20, listings, rng);
+    const decision = decideStorePurchases(store, 20, listings, {}, rng);
     const totalSpent = decision.purchases.reduce((sum, p) => sum + p.quantity * p.unitPrice, 0);
 
     expect(totalSpent).toBeLessThanOrEqual(20);
@@ -699,7 +709,7 @@ describe("decideStorePurchases", () => {
       const store = makeStore({ strategyId, specialtyCategoryId: "food", inventoryQuantity: 0 });
       const rng = createRng(1);
 
-      const decision = decideStorePurchases(store, 10_000, listings, rng);
+      const decision = decideStorePurchases(store, 10_000, listings, {}, rng);
 
       expect(decision.purchases.length).toBeGreaterThan(0);
       for (const purchase of decision.purchases) {
@@ -717,13 +727,87 @@ describe("decideStorePurchases", () => {
     const rng1 = createRng(1);
     const rng2 = createRng(1);
 
-    const freshDecision = decideStorePurchases(freshStore, 10_000, listings, rng1);
-    const stockedDecision = decideStorePurchases(stockedStore, 10_000, listings, rng2);
+    const freshDecision = decideStorePurchases(freshStore, 10_000, listings, {}, rng1);
+    const stockedDecision = decideStorePurchases(stockedStore, 10_000, listings, {}, rng2);
     const stockedQty = stockedDecision.purchases.reduce((sum, p) => sum + p.quantity, 0);
     const freshQty = freshDecision.purchases.reduce((sum, p) => sum + p.quantity, 0);
 
     expect(stockedQty).toBeLessThan(freshQty);
     expect(stockedQty).toBe(0);
+  });
+
+  it("prioritizes a listing from an advertising company (Milestone 6, D-040)", () => {
+    // Reference price for food = CATEGORY_UNIT_COST.food(4) * 2.2 = 8.8 -- both listings priced
+    // identically so, absent the advertising bonus, the tiny tie-break decides the winner.
+    const listings: WholesaleListing[] = [
+      { id: "l-quiet", companyId: "co-quiet", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+      { id: "l-ad", companyId: "co-ad", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+    ];
+    const companies: Record<string, CompanyState> = {
+      "co-quiet": makeCompany({ id: "co-quiet" }),
+      "co-ad": makeCompany({ id: "co-ad", isAdvertisingActive: true }),
+    };
+    const store = makeStore({ specialtyCategoryId: "food" });
+
+    const decision = decideStorePurchases(store, 8.8, listings, companies, createRng(1));
+
+    expect(decision.purchases[0]!.listingId).toBe("l-ad");
+  });
+
+  it("advertising-free regression: results are unaffected when no company is advertising", () => {
+    const listings: WholesaleListing[] = [
+      { id: "l-food", companyId: "co-a", categoryId: "food", quantityAvailable: 50, quality: 0.5, price: 4 },
+    ];
+    const store = makeStore({ specialtyCategoryId: "food" });
+
+    const withEmptyCompanies = decideStorePurchases(store, 20, listings, {}, createRng(1));
+    const withNeutralCompanies = decideStorePurchases(
+      store,
+      20,
+      listings,
+      { "co-a": makeCompany({ id: "co-a" }) },
+      createRng(1),
+    );
+
+    expect(withNeutralCompanies).toEqual(withEmptyCompanies);
+  });
+});
+
+describe("decideCompanyAdvertising / decideStoreAdvertising (Milestone 6, D-040)", () => {
+  it.each(ALL_STRATEGIES)("decideCompanyAdvertising follows the strategy preset's advertises flag for strategy=%s", (strategyId) => {
+    const company = makeCompany({ strategyId, ledger: { cash: 1000, cumulativeProfit: 0 } });
+    decideCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING);
+
+    expect(company.isAdvertisingActive).toBe(COMPANY_STRATEGY_PRESETS[strategyId].advertises);
+  });
+
+  it.each(ALL_STRATEGIES)("decideStoreAdvertising follows the strategy preset's advertises flag for strategy=%s", (strategyId) => {
+    const store = makeStore({ strategyId, ledger: { cash: 1000, cumulativeProfit: 0 } });
+    decideStoreAdvertising(store, MIN_ROUND_FOR_ADVERTISING);
+
+    expect(store.isAdvertisingActive).toBe(STORE_STRATEGY_PRESETS[strategyId].advertises);
+  });
+
+  it("decideCompanyAdvertising ignores an aggressive company before MIN_ROUND_FOR_ADVERTISING", () => {
+    const company = makeCompany({ strategyId: "aggressive", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    decideCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING - 1);
+
+    expect(company.isAdvertisingActive).toBe(false);
+  });
+
+  it("decideCompanyAdvertising does not charge (and does not activate) an aggressive company that can't afford it", () => {
+    const company = makeCompany({ strategyId: "aggressive", ledger: { cash: COSTS.advertisingCostPerRound - 1, cumulativeProfit: 0 } });
+    decideCompanyAdvertising(company, MIN_ROUND_FOR_ADVERTISING);
+
+    expect(company.isAdvertisingActive).toBe(false);
+    expect(company.ledger.cash).toBe(COSTS.advertisingCostPerRound - 1);
+  });
+
+  it("decideStoreAdvertising ignores a premium store before MIN_ROUND_FOR_ADVERTISING", () => {
+    const store = makeStore({ strategyId: "premium", ledger: { cash: 1000, cumulativeProfit: 0 } });
+    decideStoreAdvertising(store, MIN_ROUND_FOR_ADVERTISING - 1);
+
+    expect(store.isAdvertisingActive).toBe(false);
   });
 });
 
@@ -849,6 +933,35 @@ describe("decideHouseholdPurchases", () => {
     expect(decision.purchases[0]!.listingId).toBe("r-toys");
   });
 
+  it("ranks a listing sold by an advertising store higher (Milestone 6, D-040), regardless of household kind", () => {
+    const listings: RetailListing[] = [
+      { id: "r-quiet", storeId: "store-quiet", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
+      { id: "r-ad", storeId: "store-ad", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 10 },
+    ];
+    const stores: Record<string, StoreState> = {
+      "store-quiet": makeStore({ id: "store-quiet", specialtyCategoryId: "toys" }),
+      "store-ad": makeStore({ id: "store-ad", specialtyCategoryId: "toys", isAdvertisingActive: true }),
+    };
+    const studentHousehold = makeHousehold({ kind: "student" });
+
+    const decision = decideHouseholdPurchases(studentHousehold, 1000, listings, stores, createRng(1));
+
+    expect(decision.purchases[0]!.listingId).toBe("r-ad");
+  });
+
+  it("advertising-free regression: results are unaffected when no store is advertising", () => {
+    const listings: RetailListing[] = [
+      { id: "r1", storeId: "store-a", categoryId: "food", quantityAvailable: 50, quality: 0.9, price: 30 },
+    ];
+    const stores: Record<string, StoreState> = { "store-a": makeStore({ id: "store-a" }) };
+    const household = makeHousehold();
+
+    const withEmptyStores = decideHouseholdPurchases(household, 25, listings, {}, createRng(1));
+    const withNeutralStores = decideHouseholdPurchases(household, 25, listings, stores, createRng(1));
+
+    expect(withNeutralStores).toEqual(withEmptyStores);
+  });
+
   it("produces identical results whether trendEvent is omitted or explicitly undefined (regression guard)", () => {
     const household = makeHousehold();
     const listings: RetailListing[] = [
@@ -892,5 +1005,15 @@ describe("scoreListingForBuyer (exported for direct unit testing, D-024)", () =>
     const explicitZero = scoreListingForBuyer(10, 0.5, "food", 0.5, rng2, 0);
 
     expect(implicit).toBe(explicitZero);
+  });
+
+  it("adding advertisingScoreBonus(true) as scoreAdjustment raises the score by exactly ADVERTISING_PRIORITY_BONUS (Milestone 6, D-040)", () => {
+    const rng1 = createRng(5);
+    const rng2 = createRng(5);
+
+    const withoutBonus = scoreListingForBuyer(10, 0.5, "food", 0.5, rng1, advertisingScoreBonus(false));
+    const withBonus = scoreListingForBuyer(10, 0.5, "food", 0.5, rng2, advertisingScoreBonus(true));
+
+    expect(withBonus - withoutBonus).toBeCloseTo(0.1, 10);
   });
 });

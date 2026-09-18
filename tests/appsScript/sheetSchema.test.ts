@@ -140,6 +140,7 @@ describe("appsScript/sheetSchema", () => {
           inventoryQuantity: 0,
           lastWholesalePrice: 0,
           lastIndustrySwitchRound: null,
+          isAdvertisingActive: false,
         },
       },
       stores: {
@@ -156,6 +157,7 @@ describe("appsScript/sheetSchema", () => {
           inventoryQuality: 0.5,
           retailPrice: 0,
           lastSellingCategoryChangeRound: null,
+          isAdvertisingActive: false,
         },
       },
       households: {

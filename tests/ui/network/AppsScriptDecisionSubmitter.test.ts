@@ -133,6 +133,43 @@ describe("AppsScriptDecisionSubmitter", () => {
     });
   });
 
+  it("submits company decisions including advertise when provided (Milestone 6, D-040)", async () => {
+    const { fetchImpl, calls } = stubFetch();
+    const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
+    const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
+
+    await submitter.submitCompanyDecision("company-1", { quantity: 10, quality: 0.5, wholesalePrice: 100, advertise: true });
+
+    const result = decodeRequest(calls[0]!);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request.body).toEqual({
+      companyId: "company-1",
+      input: { quantity: 10, quality: 0.5, wholesalePrice: 100, advertise: true },
+    });
+  });
+
+  it("submits store decisions including advertise when provided, and omits it when not (Milestone 6, D-040)", async () => {
+    const { fetchImpl, calls } = stubFetch();
+    const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);
+    const submitter = new AppsScriptDecisionSubmitter(client, "SESSION1", "tok-1");
+
+    await submitter.submitStoreDecision("store-1", { advertise: true });
+    const withAdvertise = decodeRequest(calls[0]!);
+    expect(withAdvertise.ok).toBe(true);
+    if (withAdvertise.ok) {
+      expect(withAdvertise.request.body).toEqual({ storeId: "store-1", input: { advertise: true } });
+    }
+
+    await submitter.submitStoreDecision("store-1", {});
+    const withoutAdvertise = decodeRequest(calls[1]!);
+    expect(withoutAdvertise.ok).toBe(true);
+    if (withoutAdvertise.ok) {
+      const body = withoutAdvertise.request.body as { storeId: string; input: Record<string, unknown> };
+      expect(Object.keys(body.input)).not.toContain("advertise");
+    }
+  });
+
   it("submits household purchase requests to the household submit path", async () => {
     const { fetchImpl, calls } = stubFetch();
     const client = new AppsScriptSessionClient(WEB_APP_URL, fetchImpl);

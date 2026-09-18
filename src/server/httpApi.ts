@@ -408,6 +408,7 @@ function isCompanyDecisionInput(value: unknown): value is CompanyDecisionInput {
     return false;
   }
   if (value.switchToCategoryId !== undefined && !isProductCategoryId(value.switchToCategoryId)) return false;
+  if (value.advertise !== undefined && typeof value.advertise !== "boolean") return false;
   return true;
 }
 
@@ -416,6 +417,7 @@ function isStoreDecisionInput(value: unknown): value is StoreDecisionInput {
   if (value.purchaseRequest !== undefined && !isStorePurchaseRequest(value.purchaseRequest)) return false;
   if (value.retailPrice !== undefined && typeof value.retailPrice !== "number") return false;
   if (value.sellingCategoryId !== undefined && !isProductCategoryId(value.sellingCategoryId)) return false;
+  if (value.advertise !== undefined && typeof value.advertise !== "boolean") return false;
   return true;
 }
 

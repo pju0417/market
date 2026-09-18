@@ -38,6 +38,7 @@ function makeStore(id: string, ownerId: string): StoreState {
     inventoryQuality: 0.5,
     retailPrice: 10,
     lastSellingCategoryChangeRound: null,
+    isAdvertisingActive: false,
   };
 }
 

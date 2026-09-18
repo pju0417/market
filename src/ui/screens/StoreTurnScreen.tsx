@@ -1,6 +1,12 @@
 import { useMemo, useState } from "react";
 import { analyzeStoreTurn } from "../../advisor/storeAdvisor.js";
-import { MIN_ROUND_FOR_INDUSTRY_ACTIONS, NPC_STORE_SPECIALTY_DEVIATION_RULES, PRODUCT_CATEGORIES } from "../../economy/config.js";
+import {
+  COSTS,
+  MIN_ROUND_FOR_ADVERTISING,
+  MIN_ROUND_FOR_INDUSTRY_ACTIONS,
+  NPC_STORE_SPECIALTY_DEVIATION_RULES,
+  PRODUCT_CATEGORIES,
+} from "../../economy/config.js";
 import type { AutoFillPreference, PriorityPurchasePick, StorePurchaseRequest } from "../../economy/humanDecisions.js";
 import { eligibleWholesaleListingsForStore } from "../../economy/market.js";
 import { createRng } from "../../economy/rng.js";
@@ -55,9 +61,19 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>(undefined);
   const [pendingSellingCategoryId, setPendingSellingCategoryId] = useState<ProductCategoryId | "">("");
+  const [advertise, setAdvertise] = useState(false);
 
   const willSwitchCategory = pendingSellingCategoryId !== "" && pendingSellingCategoryId !== sellingCategoryId;
   const effectiveSellingCategoryId = willSwitchCategory ? (pendingSellingCategoryId as ProductCategoryId) : sellingCategoryId;
+
+  // 서버(runStoreTurn)는 판매 카테고리 변경 다음, 매입 결정보다 먼저 광고비를 차감한다
+  // (Milestone 6, docs/DECISIONS.md D-040) — 미리보기도 같은 순서로 계산해야 실제 제출 결과와
+  // 어긋나지 않는다(D-033류 재발 방지). 가게는 카테고리 변경에 선차감 비용이 없으므로
+  // 베이스는 availableCash 그대로다.
+  const canAdvertise = state.currentRound >= MIN_ROUND_FOR_ADVERTISING;
+  const adCost = canAdvertise && advertise ? COSTS.advertisingCostPerRound : 0;
+  const adUnaffordable = adCost > 0 && adCost > availableCash;
+  const cashAfterAd = Math.max(0, availableCash - (adUnaffordable ? 0 : adCost));
 
   const eligible = useMemo(
     () =>
@@ -78,9 +94,9 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
     ...(maxUnitPrice !== undefined ? { maxUnitPrice } : {}),
   };
   const preview = useMemo(
-    () => previewCategoryPurchase(eligible, companies, store.ownerId, purchaseRequest, availableCash, maxQuantity, rng),
+    () => previewCategoryPurchase(eligible, companies, store.ownerId, purchaseRequest, cashAfterAd, maxQuantity, rng),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- purchaseRequest는 매 렌더 새 객체이므로, 실제로 미리보기에 영향을 주는 원시값만 의존성으로 넣는다.
-    [eligible, companies, store.ownerId, availableCash, maxQuantity, maxUnitPriceInput, autoFillPreference, priorityPicks, rng],
+    [eligible, companies, store.ownerId, cashAfterAd, maxQuantity, maxUnitPriceInput, autoFillPreference, priorityPicks, rng],
   );
 
   const priorityListingIds = new Set(priorityPicks.map((p) => p.listingId));
@@ -165,6 +181,18 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
       )}
       {canSwitchCategory && cooldownActive && (
         <p className="empty-note">최근에 판매 카테고리를 바꿔서, 당분간은 다시 바꿀 수 없어요.</p>
+      )}
+
+      {canAdvertise && (
+        <div className="field">
+          <label className="field-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={advertise} onChange={(e) => setAdvertise(e.target.checked)} />
+            광고하기 (라운드당 {formatWon(COSTS.advertisingCostPerRound)}, 소매 구매 우선순위가 올라가요)
+          </label>
+          {adUnaffordable && (
+            <p style={{ color: "#dc2626", fontSize: 14 }}>광고비가 가진 돈보다 많아 광고할 수 없어요.</p>
+          )}
+        </div>
       )}
 
       <h3>도매시장 매물</h3>
@@ -274,12 +302,15 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
 
       <button
         className="primary"
-        disabled={disabled}
+        disabled={disabled || adUnaffordable}
         onClick={() => {
           setSubmitError(undefined);
-          const input = willSwitchCategory
-            ? { purchaseRequest, retailPrice, sellingCategoryId: pendingSellingCategoryId as ProductCategoryId }
-            : { purchaseRequest, retailPrice };
+          const input = {
+            purchaseRequest,
+            retailPrice,
+            ...(willSwitchCategory ? { sellingCategoryId: pendingSellingCategoryId as ProductCategoryId } : {}),
+            ...(advertise ? { advertise: true } : {}),
+          };
           Promise.resolve(session.submitStoreDecision(store.id, input))
             .then(() => onSubmitted())
             .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));

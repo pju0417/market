@@ -38,6 +38,7 @@ import {
   PRODUCT_CATEGORIES,
   specialtyMismatchPenalty,
 } from "./config.js";
+import { advertisingScoreBonus, applyAdvertisingDecision } from "./advertising.js";
 import { allocateCategoryPurchase } from "./purchaseMatching.js";
 import { chargeDiscretionary } from "./settlement.js";
 import { trendPriorityBonusFor, type ActiveTrendEvent } from "./trendEvent.js";
@@ -104,6 +105,11 @@ export interface CompanyDecisionInput {
    * 취급된다.
    */
   switchToCategoryId?: ProductCategoryId;
+  /**
+   * 학생이 이번 라운드 광고를 신청하고 싶을 때만 넣는다 (Milestone 6, docs/DECISIONS.md
+   * D-040). 생략하거나 false면 "광고 안 함"이며, 5라운드 미만이면 어차피 무시된다.
+   */
+  advertise?: boolean;
 }
 
 export function resolveCompanyDecision(
@@ -191,6 +197,25 @@ export function resolveStoreCategorySwitch(
 }
 
 /**
+ * 학생이 이번 라운드 광고 여부를 결정했을 때 적용한다 (Milestone 6, docs/DECISIONS.md D-040).
+ * `advertise`가 `undefined`(필드 생략)여도 "광고 안 함"으로 취급한다 — applyAdvertisingDecision
+ * 자체가 이미 "매 라운드 먼저 false로 리셋" 원칙을 담고 있으므로, 이 래퍼는 그 호출만
+ * 대신해주는 얇은 층이다.
+ */
+export function resolveCompanyAdvertising(
+  company: CompanyState,
+  currentRound: number,
+  advertise: boolean | undefined,
+): void {
+  applyAdvertisingDecision(company, currentRound, advertise === true);
+}
+
+/** 가게 버전 — resolveCompanyAdvertising과 동일한 원칙. */
+export function resolveStoreAdvertising(store: StoreState, currentRound: number, advertise: boolean | undefined): void {
+  applyAdvertisingDecision(store, currentRound, advertise === true);
+}
+
+/**
  * 1~3순위 수동 지정(1단계) + 부족분 자동배분(2단계, 안전망)을 오케스트레이션하는 함수.
  * 가게(WholesaleListing/CompanyState)와 가계(RetailListing/StoreState) 양쪽 호출부가
  * 공유한다 — 두 경우 모두 "listing → 판매자 소유자 → 자기거래 방어적 재검증"이라는 같은
@@ -219,6 +244,10 @@ export function resolveStoreCategorySwitch(
  * `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 2단계 자동배분이 소매 매물
  * (`else` 분기, listing에 `companyId`가 없는 경우)을 채점할 때만 가산점으로 반영한다 — 도매
  * 매물(`"companyId" in listing`) 채점에는 절대 반영하지 않는다(이 함수의 핵심 불변식).
+ *
+ * 광고 가산점(advertisingScoreBonus, Milestone 6, docs/DECISIONS.md D-040)은 그 반대다 — 도매/
+ * 소매 양쪽 분기 모두에 적용된다. 유행 이벤트는 도매 면역이지만 광고는 도매에도 적용된다는
+ * 점을 혼동하지 않도록 주의한다.
  */
 export function resolveSingleCategoryPurchase(
   eligible: readonly (WholesaleListing | RetailListing)[],
@@ -270,14 +299,19 @@ export function resolveSingleCategoryPurchase(
     request.autoFillPreference === "quality"
       ? (listing: WholesaleListing | RetailListing): number => {
           if ("companyId" in listing) {
-            return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, HUMAN_AUTO_FILL_QUALITY_WEIGHT, rng, 0);
+            const seller = (ownersLookup as Readonly<Record<ParticipantId, CompanyState>>)[listing.companyId];
+            const adjustment = advertisingScoreBonus(seller?.isAdvertisingActive ?? false);
+            return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, HUMAN_AUTO_FILL_QUALITY_WEIGHT, rng, adjustment);
           }
           const sellingStore = (ownersLookup as Readonly<Record<ParticipantId, StoreState>>)[listing.storeId];
           const mismatchPenalty =
             sellingStore !== undefined && sellingStore.specialtyCategoryId !== null
               ? specialtyMismatchPenalty(sellingStore.specialtyCategoryId, listing.categoryId)
               : 0;
-          const adjustment = -mismatchPenalty + trendPriorityBonusFor(listing.categoryId, trendEvent);
+          const adjustment =
+            -mismatchPenalty +
+            trendPriorityBonusFor(listing.categoryId, trendEvent) +
+            advertisingScoreBonus(sellingStore?.isAdvertisingActive ?? false);
           return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, HUMAN_AUTO_FILL_QUALITY_WEIGHT, rng, adjustment);
         }
       : undefined;
