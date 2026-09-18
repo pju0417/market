@@ -40,6 +40,7 @@ import {
 } from "./config.js";
 import { allocateCategoryPurchase } from "./purchaseMatching.js";
 import { chargeDiscretionary } from "./settlement.js";
+import { trendPriorityBonusFor, type ActiveTrendEvent } from "./trendEvent.js";
 import {
   decideCompanyProduction,
   decideHouseholdPurchases,
@@ -214,6 +215,10 @@ export function resolveStoreCategorySwitch(
  * `categoryUnitBudget`을 1단계 클램핑부터 일관되게 사용한다 — 학생 입력(`pick.quantity`,
  * `maxQuantity`)이 비정수여도 최종 확정 수량은 항상 정수이고(D-027류 재발 방지), 카테고리별
  * 상한도 1단계 수동 지정 단계부터 실제로 강제된다(2단계 부족분 계산에만 적용되던 이전 버그 수정).
+ *
+ * `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 2단계 자동배분이 소매 매물
+ * (`else` 분기, listing에 `companyId`가 없는 경우)을 채점할 때만 가산점으로 반영한다 — 도매
+ * 매물(`"companyId" in listing`) 채점에는 절대 반영하지 않는다(이 함수의 핵심 불변식).
  */
 export function resolveSingleCategoryPurchase(
   eligible: readonly (WholesaleListing | RetailListing)[],
@@ -223,6 +228,7 @@ export function resolveSingleCategoryPurchase(
   cashBudget: number,
   unitBudget: number,
   rng: Rng,
+  trendEvent?: ActiveTrendEvent,
 ): { purchases: PurchaseLine[]; spentCash: number; spentUnits: number } {
   const isValidSeller = (listing: WholesaleListing | RetailListing): boolean => {
     const sellerId = "companyId" in listing ? listing.companyId : listing.storeId;
@@ -267,10 +273,11 @@ export function resolveSingleCategoryPurchase(
             return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, HUMAN_AUTO_FILL_QUALITY_WEIGHT, rng, 0);
           }
           const sellingStore = (ownersLookup as Readonly<Record<ParticipantId, StoreState>>)[listing.storeId];
-          const adjustment =
+          const mismatchPenalty =
             sellingStore !== undefined && sellingStore.specialtyCategoryId !== null
-              ? -specialtyMismatchPenalty(sellingStore.specialtyCategoryId, listing.categoryId)
+              ? specialtyMismatchPenalty(sellingStore.specialtyCategoryId, listing.categoryId)
               : 0;
+          const adjustment = -mismatchPenalty + trendPriorityBonusFor(listing.categoryId, trendEvent);
           return scoreListingForBuyer(listing.price, listing.quality, listing.categoryId, HUMAN_AUTO_FILL_QUALITY_WEIGHT, rng, adjustment);
         }
       : undefined;
@@ -352,6 +359,10 @@ function orderCategoriesByFixedPriority(
  *
  * 카테고리는 식품→의류→그 외 순서로 처리하며, 한 카테고리에서 다 쓰지 못한 현금/수량 예산은
  * 다음 카테고리로 그대로 이어진다(가계 전체 예산은 카테고리별로 나뉘어 있지 않다).
+ *
+ * `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 봇 위임 경로
+ * (decideHouseholdPurchases)와 사람 입력 경로(resolveSingleCategoryPurchase) 양쪽에 그대로
+ * 전달한다.
  */
 export function resolveHouseholdPurchases(
   household: HouseholdState,
@@ -360,9 +371,10 @@ export function resolveHouseholdPurchases(
   stores: Readonly<Record<ParticipantId, StoreState>>,
   requests: readonly CategoryPurchaseRequest[] | undefined,
   rng: Rng,
+  trendEvent?: ActiveTrendEvent,
 ): HouseholdPurchaseDecision {
   if (requests === undefined) {
-    return decideHouseholdPurchases(household, availableCash, eligibleListings, stores, rng);
+    return decideHouseholdPurchases(household, availableCash, eligibleListings, stores, rng, trendEvent);
   }
 
   const ordered = orderCategoriesByFixedPriority(requests);
@@ -380,6 +392,7 @@ export function resolveHouseholdPurchases(
       remainingCash,
       remainingUnits,
       rng,
+      trendEvent,
     );
     purchases.push(...result.purchases);
     remainingCash -= result.spentCash;

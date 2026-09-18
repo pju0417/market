@@ -16,6 +16,7 @@ import {
 import { AdvisorPanel } from "./AdvisorPanel.js";
 import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
+import { TrendEventBanner } from "./TrendEventBanner.js";
 
 interface Props {
   session: DecisionSubmitter;
@@ -103,6 +104,7 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
     <>
     <MarketEventBanner state={state} role="store" />
     <IncomeEventBanner state={state} role="store" />
+    <TrendEventBanner state={state} role="store" />
     <div className="card">
       <h2>가게 턴</h2>
       <div className="stat-row">

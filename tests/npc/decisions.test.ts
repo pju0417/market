@@ -18,6 +18,7 @@ import {
   scoreListingForBuyer,
 } from "../../src/npc/decisions.js";
 import type { ActiveMarketEvent } from "../../src/economy/marketEvents.js";
+import type { ActiveTrendEvent } from "../../src/economy/trendEvent.js";
 import type {
   CompanyState,
   GameState,
@@ -830,6 +831,34 @@ describe("decideHouseholdPurchases", () => {
     const decision = decideHouseholdPurchases(studentHousehold, 1000, listings, stores, createRng(1));
 
     expect(decision.purchases[0]!.listingId).toBe("r-match");
+  });
+
+  it("ranks the trend event's category listing higher when trendEvent is supplied (Milestone 6 proposal C, D-039), regardless of household kind", () => {
+    const listings: RetailListing[] = [
+      { id: "r-food", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 4 * 2.2 },
+      { id: "r-toys", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 8 * 2.2 },
+    ];
+    const trendEvent: ActiveTrendEvent = { categoryId: "toys", priorityBonus: 0.1 };
+    const studentHousehold = makeHousehold({ kind: "student" });
+
+    // Without the trend event, food's essential-adjacent reference pricing makes both scores
+    // close; toys wins here deterministically once the trend bonus (0.1) is added because it
+    // exceeds the maximum possible tie-break spread (0.02).
+    const decision = decideHouseholdPurchases(studentHousehold, 1000, listings, {}, createRng(7), trendEvent);
+
+    expect(decision.purchases[0]!.listingId).toBe("r-toys");
+  });
+
+  it("produces identical results whether trendEvent is omitted or explicitly undefined (regression guard)", () => {
+    const household = makeHousehold();
+    const listings: RetailListing[] = [
+      { id: "r1", storeId: "store-a", categoryId: "food", quantityAvailable: 50, quality: 0.9, price: 30 },
+    ];
+
+    const withoutArg = decideHouseholdPurchases(household, 25, listings, {}, createRng(1));
+    const withExplicitUndefined = decideHouseholdPurchases(household, 25, listings, {}, createRng(1), undefined);
+
+    expect(withExplicitUndefined).toEqual(withoutArg);
   });
 });
 

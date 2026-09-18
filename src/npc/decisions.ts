@@ -24,6 +24,7 @@ import {
 } from "../economy/config.js";
 import { estimateCategoryMargin, computeCategoryAverages } from "../economy/marketStats.js";
 import { countRemainingMarketEventRounds, type ActiveMarketEvent } from "../economy/marketEvents.js";
+import { trendPriorityBonusFor, type ActiveTrendEvent } from "../economy/trendEvent.js";
 import { allocateCategoryPurchase } from "../economy/purchaseMatching.js";
 import { rngRange, type Rng } from "../economy/rng.js";
 import { chargeDiscretionary } from "../economy/settlement.js";
@@ -318,7 +319,9 @@ export interface HouseholdPurchaseDecision {
  * eligibleListings는 이미 자기 거래 금지(D-006) 필터를 적용한 상태여야 한다
  * (src/economy/market.ts의 eligibleRetailListingsForHousehold 참고). stores는 각 매물의
  * 판매 가게를 조회해 전문 업종 이탈 여부(specialtyMismatchPenalty)를 판단하는 데 쓴다
- * (Milestone 6).
+ * (Milestone 6). trendEvent는 유행 이벤트(Milestone 6 제안 C, docs/DECISIONS.md D-039) 대상
+ * 카테고리 소매 매물에 가산점을 더하는 데 쓴다 — household.kind와 무관하게 적용된다(전문
+ * 업종 이탈 페널티와 같은 패턴).
  */
 export function decideHouseholdPurchases(
   household: HouseholdState,
@@ -326,6 +329,7 @@ export function decideHouseholdPurchases(
   eligibleListings: readonly RetailListing[],
   stores: Readonly<Record<ParticipantId, StoreState>>,
   rng: Rng,
+  trendEvent?: ActiveTrendEvent,
 ): HouseholdPurchaseDecision {
   const preset = HOUSEHOLD_STRATEGY_PRESETS[household.strategyId];
   const qualityWeight = preset.qualitySensitivity / Math.max(preset.qualitySensitivity + preset.priceSensitivity, 1e-6);
@@ -356,7 +360,7 @@ export function decideHouseholdPurchases(
         listing.categoryId,
         qualityWeight,
         rng,
-        priorityBonus - mismatchPenalty,
+        priorityBonus - mismatchPenalty + trendPriorityBonusFor(listing.categoryId, trendEvent),
       );
     },
   );
@@ -373,6 +377,8 @@ export function decideHouseholdPurchases(
  *   (D-024 후속 수정).
  * - 가게의 전문 업종 이탈 판매 매력도 페널티(specialtyMismatchPenalty, Milestone 6,
  *   docs/DECISIONS.md D-033): household.kind와 무관하게 적용된다.
+ * - 유행 이벤트 가산점(trendPriorityBonusFor, Milestone 6 제안 C, docs/DECISIONS.md D-039):
+ *   household.kind와 무관하게 적용된다.
  * decideStorePurchases(기업→가게 도매 매입)에는 영향을 주지 않도록 항상 기본값 0으로 호출된다.
  */
 export function scoreListingForBuyer(

@@ -297,6 +297,25 @@ export const INCOME_EVENT_BUDGET_MULTIPLIER = 0.7;
  */
 export const MARKET_EVENT_RNG_SEED_OFFSET = 9001;
 
+/**
+ * 유행 이벤트("유행 카테고리", Milestone 6 제안 C, docs/DECISIONS.md D-039) 발생 라운드.
+ * 원자재비 변동 이벤트(MARKET_EVENT_ROUNDS)와 같은 라운드에 겹쳐도 상관없다 — 두 이벤트는
+ * 서로 완전히 독립적인 메커니즘이다(하나는 생산단가, 하나는 소매 구매 우선순위 스코어링).
+ */
+export const TREND_EVENT_ROUNDS: readonly number[] = [6];
+
+/** 유행 카테고리 소매 매물이 가계 구매 스코어링에서 받는 가산점(scoreListingForBuyer 기준). */
+export const TREND_EVENT_PRIORITY_BONUS = 0.1;
+
+/**
+ * 유행 카테고리를 뽑는 데 쓰는 rng 시드 오프셋. MARKET_EVENT_RNG_SEED_OFFSET(9001)과 절대
+ * 겹치면 안 된다 — 겹치면 두 이벤트가 같은 rng 스트림을 공유해, 한쪽 카테고리 선정이 다른
+ * 쪽 카테고리 선정에 의도치 않게 영향을 주게 된다(결정론은 유지되지만 두 이벤트가 더 이상
+ * 독립적이지 않게 된다). 게임플레이 rng(`rngSeed+1`)나 초기화 rng(`rngSeed` 단독)와도 겹치지
+ * 않아야 한다.
+ */
+export const TREND_EVENT_RNG_SEED_OFFSET = 70021;
+
 export const NPC_TARGETS = {
   /** 카테고리 하나당 최소 몇 개 기업(학생+NPC 합계)이 있어야 하는가. */
   minCompaniesPerCategory: 2,

@@ -19,6 +19,7 @@ import {
 import { incomeEventBudgetMultiplier } from "../economy/incomeEvent.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
+import { getActiveTrendEvent } from "../economy/trendEvent.js";
 import { computeCategoryClearingSummary } from "../economy/marketStats.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
@@ -532,6 +533,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       acc.roundStartRetailListings = state.retailListings.map((l) => ({ ...l }));
     }
     const roundStartListings = acc.roundStartRetailListings;
+    const trendEvent = getActiveTrendEvent(state.config.rngSeed, state.currentRound);
 
     const orderedIds = orderBuyersForTurn(
       householdIds,
@@ -546,7 +548,15 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
       const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
       const requested = decisionSource?.getHouseholdPurchaseRequest(household.id);
-      const decision = resolveHouseholdPurchases(household, household.ledger.cash, eligible, state.stores, requested, rng);
+      const decision = resolveHouseholdPurchases(
+        household,
+        household.ledger.cash,
+        eligible,
+        state.stores,
+        requested,
+        rng,
+        trendEvent,
+      );
 
       let qualityUnits = 0;
       let unitsBought = 0;

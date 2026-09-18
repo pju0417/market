@@ -5,12 +5,14 @@ import {
   resolveCompanyDecision,
   resolveCompanyIndustrySwitch,
   resolveHouseholdPurchases,
+  resolveSingleCategoryPurchase,
   resolveStoreCategorySwitch,
   resolveStorePurchases,
   type CategoryPurchaseRequest,
   type StorePurchaseRequest,
 } from "../../src/economy/humanDecisions.js";
 import { decideCompanyProduction } from "../../src/npc/decisions.js";
+import type { ActiveTrendEvent } from "../../src/economy/trendEvent.js";
 import type { CompanyState, HouseholdState, RetailListing, StoreState, WholesaleListing } from "../../src/types/domain.js";
 
 function makeCompany(overrides: Partial<CompanyState> = {}): CompanyState {
@@ -325,6 +327,95 @@ describe("resolveStorePurchases (구매 매칭 알고리즘 재설계 Stage 1)",
     expect(decision.purchases.some((p) => p.listingId === "l-expensive-pick")).toBe(true);
     expect(decision.purchases.some((p) => p.listingId === "l-cheap-autofill")).toBe(true);
     expect(decision.purchases.some((p) => p.listingId === "l-too-expensive-for-autofill")).toBe(false);
+  });
+});
+
+describe("resolveSingleCategoryPurchase trendEvent handling (Milestone 6 제안 C, D-039)", () => {
+  // food/toys reference prices: CATEGORY_UNIT_COST(4/8) * REFERENCE_PRICE_MULTIPLIER(2.2) = 8.8/17.6.
+  const retailCandidates: RetailListing[] = [
+    { id: "r-food", storeId: "store-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+    { id: "r-toys", storeId: "store-a", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 17.6 },
+  ];
+  const retailStores: Record<string, StoreState> = {
+    "store-a": makeStore({ id: "store-a", ownerId: "student-2", specialtyCategoryId: null }),
+  };
+
+  const wholesaleCandidates: WholesaleListing[] = [
+    { id: "w-food", companyId: "co-a", categoryId: "food", quantityAvailable: 10, quality: 0.5, price: 8.8 },
+    { id: "w-toys", companyId: "co-b", categoryId: "toys", quantityAvailable: 10, quality: 0.5, price: 17.6 },
+  ];
+  const wholesaleCompanies: Record<string, CompanyState> = {
+    "co-a": makeCompany({ id: "co-a", ownerId: "student-2" }),
+    "co-b": makeCompany({ id: "co-b", ownerId: "student-3" }),
+  };
+  const trendEventForToys: ActiveTrendEvent = { categoryId: "toys", priorityBonus: 0.1 };
+
+  it("autoFillPreference='quality' + retail listing: trendEvent's bonus flips the winner toward the trend category", () => {
+    const request = categoryRequest({ categoryId: "food", maxQuantity: 1, autoFillPreference: "quality" });
+
+    const withoutTrend = resolveSingleCategoryPurchase(retailCandidates, retailStores, "student-1", request, 1000, 1, createRng(1));
+    const withTrend = resolveSingleCategoryPurchase(
+      retailCandidates,
+      retailStores,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+      trendEventForToys,
+    );
+
+    // Both listings are otherwise identical (same normalized price/quality), so without the
+    // trend bonus the winner is decided purely by the tiny tie-break, but with the 0.1 bonus
+    // (which exceeds the max possible tie-break spread of 0.02) toys must win deterministically.
+    expect(withTrend.purchases[0]!.listingId).toBe("r-toys");
+    expect(withoutTrend.purchases[0]!.listingId).not.toBe(withTrend.purchases[0]!.listingId);
+  });
+
+  it("autoFillPreference='price' (default): trendEvent has no effect on retail listings", () => {
+    // food is cheaper than toys per unit here (raw price, not normalized) so price-mode always
+    // picks food regardless of any trend bonus on toys.
+    const request = categoryRequest({ categoryId: "food", maxQuantity: 1 });
+
+    const withoutTrend = resolveSingleCategoryPurchase(retailCandidates, retailStores, "student-1", request, 1000, 1, createRng(1));
+    const withTrend = resolveSingleCategoryPurchase(
+      retailCandidates,
+      retailStores,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+      trendEventForToys,
+    );
+
+    expect(withTrend).toEqual(withoutTrend);
+  });
+
+  it("wholesale listings ('companyId' in listing) are never affected by trendEvent, even with autoFillPreference='quality' (core invariant)", () => {
+    const request = storeRequest({ maxQuantity: 1, autoFillPreference: "quality" });
+
+    const withoutTrend = resolveSingleCategoryPurchase(
+      wholesaleCandidates,
+      wholesaleCompanies,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+    );
+    const withTrend = resolveSingleCategoryPurchase(
+      wholesaleCandidates,
+      wholesaleCompanies,
+      "student-1",
+      request,
+      1000,
+      1,
+      createRng(1),
+      trendEventForToys,
+    );
+
+    expect(withTrend).toEqual(withoutTrend);
   });
 });
 

@@ -9,6 +9,7 @@
  */
 import { resolveSingleCategoryPurchase, type CategoryPurchaseRequest, type StorePurchaseRequest } from "../economy/humanDecisions.js";
 import type { Rng } from "../economy/rng.js";
+import type { ActiveTrendEvent } from "../economy/trendEvent.js";
 import type { PurchaseLine } from "../npc/decisions.js";
 import type {
   CompanyState,
@@ -76,7 +77,9 @@ export interface CategoryPurchasePreview {
  * 그대로 호출한다(D-033류 화면-서버 계산 불일치 재발 방지 — 화면이 별도로 계산 로직을 베껴
  * 쓰지 않는다). `ownersLookup`/`ownerIdOfBuyer`는 자기 거래 방어적 재검증에 쓰인다 — 가게
  * 화면은 `state.companies`/`store.ownerId`를, 가계 화면은 `state.stores`/`household.ownerId`를
- * 그대로 넘기면 된다.
+ * 그대로 넘기면 된다. `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 가계 화면만
+ * 넘긴다 — 가게(도매) 화면은 넘기지 않아 유행 이벤트가 도매 미리보기에 전혀 영향을 주지
+ * 않는다.
  */
 export function previewCategoryPurchase(
   eligible: readonly (WholesaleListing | RetailListing)[],
@@ -86,6 +89,7 @@ export function previewCategoryPurchase(
   cashBudget: number,
   unitBudget: number,
   rng: Rng,
+  trendEvent?: ActiveTrendEvent,
 ): CategoryPurchasePreview {
-  return resolveSingleCategoryPurchase(eligible, ownersLookup, ownerIdOfBuyer, request, cashBudget, unitBudget, rng);
+  return resolveSingleCategoryPurchase(eligible, ownersLookup, ownerIdOfBuyer, request, cashBudget, unitBudget, rng, trendEvent);
 }

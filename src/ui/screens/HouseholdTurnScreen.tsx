@@ -5,6 +5,7 @@ import type { AutoFillPreference, CategoryPurchaseRequest, PriorityPurchasePick 
 import { incomeEventBudgetMultiplier } from "../../economy/incomeEvent.js";
 import { eligibleRetailListingsForHousehold } from "../../economy/market.js";
 import { createRng } from "../../economy/rng.js";
+import { getActiveTrendEvent } from "../../economy/trendEvent.js";
 import { MAX_HOUSEHOLD_PURCHASE_UNITS } from "../../npc/decisions.js";
 import type { DecisionSubmitter } from "../network/DecisionSubmitter.js";
 import type { GameState, HouseholdState, ParticipantId, ProductCategoryId, RetailListing, StoreState } from "../../types/domain.js";
@@ -13,6 +14,7 @@ import { computeHouseholdTotalBudget, filterEligibleRetailListings, previewCateg
 import { AdvisorPanel } from "./AdvisorPanel.js";
 import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
+import { TrendEventBanner } from "./TrendEventBanner.js";
 
 const FIXED_CATEGORY_ORDER: readonly ProductCategoryId[] = [
   ...ESSENTIAL_CATEGORY_IDS,
@@ -75,6 +77,10 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
   });
 
   const rng = createRng(1);
+  // 서버(runConsumerPurchases, src/engine/simulateGame.ts)는 유행 이벤트(Milestone 6 제안 C,
+  // docs/DECISIONS.md D-039) 가산점을 소매 구매 스코어링에 반영한다 — 미리보기도 같은 이벤트를
+  // 반영해야 실제 제출 결과와 어긋나지 않는다(D-037류 화면-서버 수치 불일치 재발 방지).
+  const trendEvent = getActiveTrendEvent(state.config.rngSeed, state.currentRound);
   const previewByCategory: Partial<Record<ProductCategoryId, ReturnType<typeof previewCategoryPurchase>>> = {};
   let remainingCash = totalBudget;
   let remainingUnits = MAX_HOUSEHOLD_PURCHASE_UNITS;
@@ -87,6 +93,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
       remainingCash,
       remainingUnits,
       rng,
+      trendEvent,
     );
     previewByCategory[request.categoryId] = preview;
     remainingCash -= preview.spentCash;
@@ -113,6 +120,7 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
     <>
     <MarketEventBanner state={state} role="household" />
     <IncomeEventBanner state={state} role="household" />
+    <TrendEventBanner state={state} role="household" />
     <div className="card">
       <h2>가계 턴</h2>
       <div className="stat-row">
