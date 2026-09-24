@@ -185,5 +185,26 @@ Google 계정/브라우저가 없어 근본적으로 검증 불가능하다. 9�
    느리다. 셀 문자수 한도는 Milestone 5 1부에서 이미 검증했지만(`sheetSchema.test.ts`),
    실제 응답 지연이 학생이 체감할 정도인지는 배포 후에만 알 수 있다.
 
+## 10. 게임 화면(정적 프런트엔드) 호스팅 — GitHub Pages
+
+Apps Script는 API만 담당한다. 학생이 여는 화면은 `npm run build`가 만드는 `dist/` 정적
+파일이며, 별도 서버 없이 정적 호스팅에 올리면 된다. `vite.config.ts`의 `base: "./"`로
+자산 경로를 상대 경로로 만들어 두었기 때문에 `https://계정.github.io/저장소이름/` 같은
+하위 경로에서도 깨지지 않는다(빌드 후 `dist/index.html`이 `./assets/...`를 가리키는지 확인함).
+
+1. GitHub에 저장소를 만들고 이 프로젝트를 push한다 (`main` 또는 `master` 브랜치).
+2. 저장소 **Settings → Pages → Source**를 **GitHub Actions**로 바꾼다.
+3. push하면 `.github/workflows/pages.yml`이 typecheck·테스트·빌드 후 `dist/`를 배포한다.
+   **Actions 탭**에서 성공을 확인하고, 발급된 주소를 학생에게 안내한다.
+4. 접속 후 "함께 하기 → Apps Script 웹앱 URL로 접속"에서 5번 단계의 `.../exec` 주소를 입력한다.
+
+주의:
+- Pages 화면에서 "같은 Wi-Fi/기기의 로컬 서버"는 동작하지 않는다(그 서버는 `npm run dev`로만
+  뜬다). 배포 환경에서는 항상 Apps Script 경로를 쓴다.
+- 저장소가 **비공개**여도 Pages 사이트는 공개 주소다(플랜에 따라 다름). 게임 코드에 비밀 값은
+  없지만 공개 여부는 확인하고 올려라.
+- 이 워크플로는 **한 번도 실제로 실행해본 적이 없다.** 첫 실행에서 실패하면 Actions 로그를
+  보고 이 절을 고친다.
+
 문제가 발견되면 이 문서의 해당 단계를 갱신하고, 필요하면 `docs/DECISIONS.md`에 새 항목
 (D-033 이후)으로 원인/해결책을 기록한다.
