@@ -19,6 +19,7 @@ import { NetworkGameScreen } from "./screens/NetworkGameScreen.js";
 import { NetworkJoinScreen } from "./screens/NetworkJoinScreen.js";
 import { NetworkLobbyScreen } from "./screens/NetworkLobbyScreen.js";
 import { ResumePromptScreen } from "./screens/ResumePromptScreen.js";
+import { RoundHud } from "./screens/RoundHud.js";
 import { RoundResultScreen } from "./screens/RoundResultScreen.js";
 import { SetupScreen } from "./screens/SetupScreen.js";
 import { StoreTurnScreen } from "./screens/StoreTurnScreen.js";
@@ -160,13 +161,13 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
     <>
       <div style={{ display: teacherViewOpen ? "none" : undefined }}>
         {!gameOver && (
-          <p className="round-badge" style={{ display: "inline-block", marginBottom: 16, marginRight: 12 }}>
-            {state.currentRound}/{state.config.totalRounds}라운드 · {PHASE_LABELS[phase]}
-          </p>
+          <RoundHud round={state.currentRound} totalRounds={state.config.totalRounds} phaseLabel={PHASE_LABELS[phase]} />
         )}
-        <button className="secondary" onClick={() => setTeacherViewOpen(true)}>
-          교사 화면 보기
-        </button>
+        <div className="toolbar">
+          <button className="secondary" onClick={() => setTeacherViewOpen(true)}>
+            👩‍🏫 교사 화면 보기
+          </button>
+        </div>
 
         {gameOver && <GameOverScreen state={state} player={player} onRestart={onRestart} />}
 
@@ -246,17 +247,28 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
+        <span className="app-logo-icon" aria-hidden="true">🏙️</span>
         <h1>시장경제 체험 게임</h1>
       </header>
 
       {mode.kind === "mode-select" && (
-        <div className="card">
-          <button className="primary" onClick={() => setMode({ kind: "local" })} style={{ marginRight: 12 }}>
-            혼자 하기
-          </button>
-          <button className="secondary" onClick={() => setMode({ kind: "network-backend-select" })}>
-            함께 하기
-          </button>
+        <div className="title-screen">
+          <div className="title-mascots" aria-hidden="true">
+            🏭 🏪 🏠
+          </div>
+          <p className="title-tagline">만들고, 팔고, 사면서 시장을 배워요!</p>
+          <div className="mode-cards">
+            <button className="mode-card mode-card-solo" onClick={() => setMode({ kind: "local" })}>
+              <span className="mode-card-icon" aria-hidden="true">🎮</span>
+              <span className="mode-card-title">혼자 하기</span>
+              <span className="mode-card-desc">나 혼자 기업·가게·가계를 모두 운영해요</span>
+            </button>
+            <button className="mode-card mode-card-team" onClick={() => setMode({ kind: "network-backend-select" })}>
+              <span className="mode-card-icon" aria-hidden="true">👫</span>
+              <span className="mode-card-title">함께 하기</span>
+              <span className="mode-card-desc">친구들과 같은 시장에서 겨뤄요</span>
+            </button>
+          </div>
         </div>
       )}
 

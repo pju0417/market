@@ -44,3 +44,14 @@ export const ADVICE_DATA_AVAILABILITY_NOTES: Record<TurnAdvice["dataAvailability
 export function formatWon(amount: number): string {
   return `${Math.round(amount).toLocaleString("ko-KR")}원`;
 }
+
+/** 손익 표시용: 양수에는 +를 붙이고(음수는 formatWon이 -를 붙인다) 색상과 무관하게 부호로도 구분한다. */
+export function signedWon(amount: number): string {
+  return `${Math.round(amount) > 0 ? "+" : ""}${formatWon(amount)}`;
+}
+
+/** 손익 색상 클래스 (App.css). 색은 보조 수단이고 부호는 signedWon이 담당한다. */
+export function profitClass(amount: number): string {
+  const rounded = Math.round(amount);
+  return rounded > 0 ? "profit-positive" : rounded < 0 ? "profit-negative" : "";
+}

@@ -1,5 +1,5 @@
 import type { GameState, PlayerState } from "../../types/domain.js";
-import { formatWon } from "../labels.js";
+import { formatWon, profitClass, signedWon } from "../labels.js";
 
 interface Props {
   state: GameState;
@@ -21,13 +21,15 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
   const household = state.households[player.householdId];
 
   return (
-    <div className="card">
-      <h2>{metrics.round}라운드 결과</h2>
+    <div className="card card-result">
+      <h2 className="card-title">
+        <span className="role-icon" aria-hidden="true">🏁</span> {metrics.round}라운드 결과
+      </h2>
 
-      <h3>내 기업</h3>
+      <h3>🏭 내 기업</h3>
       <div className="stat-row">
         <span className="label">이번 라운드 손익</span>
-        <span className="value">{formatWon(myCompanyProfit)}</span>
+        <span className={`value ${profitClass(myCompanyProfit)}`}>{signedWon(myCompanyProfit)}</span>
       </div>
       <div className="stat-row">
         <span className="label">도매시장 점유율</span>
@@ -35,13 +37,13 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
       </div>
       <div className="stat-row">
         <span className="label">누적 손익</span>
-        <span className="value">{formatWon(state.companies[player.companyId]!.ledger.cumulativeProfit)}</span>
+        <span className={`value ${profitClass(state.companies[player.companyId]!.ledger.cumulativeProfit)}`}>{signedWon(state.companies[player.companyId]!.ledger.cumulativeProfit)}</span>
       </div>
 
-      <h3>내 가게</h3>
+      <h3>🏪 내 가게</h3>
       <div className="stat-row">
         <span className="label">이번 라운드 손익</span>
-        <span className="value">{formatWon(myStoreProfit)}</span>
+        <span className={`value ${profitClass(myStoreProfit)}`}>{signedWon(myStoreProfit)}</span>
       </div>
       <div className="stat-row">
         <span className="label">소매시장 점유율</span>
@@ -49,10 +51,10 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
       </div>
       <div className="stat-row">
         <span className="label">누적 손익</span>
-        <span className="value">{formatWon(state.stores[player.storeId]!.ledger.cumulativeProfit)}</span>
+        <span className={`value ${profitClass(state.stores[player.storeId]!.ledger.cumulativeProfit)}`}>{signedWon(state.stores[player.storeId]!.ledger.cumulativeProfit)}</span>
       </div>
 
-      <h3>내 가계</h3>
+      <h3>🏠 내 가계</h3>
       <div className="stat-row">
         <span className="label">만족도</span>
         <span className="value">{household ? (household.satisfactionScore * 100).toFixed(0) : "-"}점</span>
@@ -62,7 +64,7 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         <span className="value">{household ? formatWon(household.ledger.cash) : "-"}</span>
       </div>
 
-      <h3>전체 시장</h3>
+      <h3>📊 전체 시장</h3>
       <div className="stat-row">
         <span className="label">도매 거래량 / 거래액</span>
         <span className="value">
@@ -80,8 +82,8 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         <span className="value">{(metrics.averageHouseholdSatisfaction * 100).toFixed(0)}점</span>
       </div>
 
-      <button className="primary" onClick={onNext} disabled={disabled} style={{ marginTop: 16 }}>
-        {isLastRound ? "최종 결과 보기" : "다음 라운드로"}
+      <button className="primary big" onClick={onNext} disabled={disabled} style={{ marginTop: 16 }}>
+        {isLastRound ? "🏆 최종 결과 보기" : "다음 라운드로 ➡️"}
       </button>
     </div>
   );

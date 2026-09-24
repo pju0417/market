@@ -121,11 +121,14 @@ export function HouseholdTurnScreen({ session, state, version, household, stores
     <MarketEventBanner state={state} role="household" />
     <IncomeEventBanner state={state} role="household" />
     <TrendEventBanner state={state} role="household" />
-    <div className="card">
-      <h2>가계 턴</h2>
-      <div className="stat-row">
-        <span className="label">저축</span>
-        <span className="value">{formatWon(household.ledger.cash)}</span>
+    <div className="card card-role-household">
+      <h2 className="card-title">
+        <span className="role-icon" aria-hidden="true">🏠</span> 가계 턴
+      </h2>
+      <div className="hud-chips">
+        <span className="hud-chip">
+          <span aria-hidden="true">🐷</span> 저축 <strong>{formatWon(household.ledger.cash)}</strong>
+        </span>
       </div>
       <div className="stat-row">
         <span className="label">이번 라운드 받을 용돈</span>

@@ -10,6 +10,7 @@ import { StoreTurnScreen } from "./StoreTurnScreen.js";
 import { HouseholdTurnScreen } from "./HouseholdTurnScreen.js";
 import { RoundResultScreen } from "./RoundResultScreen.js";
 import { GameOverScreen } from "./GameOverScreen.js";
+import { RoundHud } from "./RoundHud.js";
 
 interface Props {
   client: SessionClient;
@@ -63,9 +64,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
       )}
 
       {!gameOver && (
-        <p className="round-badge" style={{ display: "inline-block", marginBottom: 16 }}>
-          {state.currentRound}/{state.config.totalRounds}라운드 · {PHASE_LABELS[phase]}
-        </p>
+        <RoundHud round={state.currentRound} totalRounds={state.config.totalRounds} phaseLabel={PHASE_LABELS[phase]} />
       )}
 
       {gameOver && <GameOverScreen state={state} player={player} onRestart={() => window.location.reload()} />}

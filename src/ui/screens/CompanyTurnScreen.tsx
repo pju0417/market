@@ -95,11 +95,14 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
     <MarketEventBanner state={state} role="company" />
     <IncomeEventBanner state={state} role="company" />
     <TrendEventBanner state={state} role="company" />
-    <div className="card">
-      <h2>기업 턴</h2>
-      <div className="stat-row">
-        <span className="label">현재 보유 현금</span>
-        <span className="value">{formatWon(company.ledger.cash)}</span>
+    <div className="card card-role-company">
+      <h2 className="card-title">
+        <span className="role-icon" aria-hidden="true">🏭</span> 기업 턴
+      </h2>
+      <div className="hud-chips">
+        <span className="hud-chip">
+          <span aria-hidden="true">💰</span> 현재 보유 현금 <strong>{formatWon(company.ledger.cash)}</strong>
+        </span>
       </div>
       <div className="stat-row">
         <span className="label">이번 라운드 고정비 (인건비+임대료, {DISTRICT_LABELS[company.districtId]})</span>

@@ -28,12 +28,14 @@ export function SetupScreen({ onStart }: Props) {
 
   return (
     <div className="card">
-      <h2>창업 준비</h2>
-      <p style={{ color: "#6b7280", fontSize: 14 }}>
+      <h2 className="card-title">
+        <span className="role-icon" aria-hidden="true">🚀</span> 창업 준비
+      </h2>
+      <p className="muted-text">
         기업과 가게의 위치, 업종을 정해요. 기업에 좋은 위치와 가게에 좋은 위치는 서로 달라요.
       </p>
 
-      <h3>기업</h3>
+      <h3>🏭 기업</h3>
       <label className="field">
         <span className="field-label">위치</span>
         <select value={companyDistrictId} onChange={(e) => setCompanyDistrictId(e.target.value as typeof companyDistrictId)}>
@@ -55,7 +57,7 @@ export function SetupScreen({ onStart }: Props) {
         </select>
       </label>
 
-      <h3>가게</h3>
+      <h3>🏪 가게</h3>
       <label className="field">
         <span className="field-label">위치</span>
         <select value={storeDistrictId} onChange={(e) => setStoreDistrictId(e.target.value as typeof storeDistrictId)}>

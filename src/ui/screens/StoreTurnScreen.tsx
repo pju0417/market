@@ -121,11 +121,14 @@ export function StoreTurnScreen({ session, state, version, store, companies, onS
     <MarketEventBanner state={state} role="store" />
     <IncomeEventBanner state={state} role="store" />
     <TrendEventBanner state={state} role="store" />
-    <div className="card">
-      <h2>가게 턴</h2>
-      <div className="stat-row">
-        <span className="label">현재 보유 현금</span>
-        <span className="value">{formatWon(store.ledger.cash)}</span>
+    <div className="card card-role-store">
+      <h2 className="card-title">
+        <span className="role-icon" aria-hidden="true">🏪</span> 가게 턴
+      </h2>
+      <div className="hud-chips">
+        <span className="hud-chip">
+          <span aria-hidden="true">💰</span> 현재 보유 현금 <strong>{formatWon(store.ledger.cash)}</strong>
+        </span>
       </div>
       <div className="stat-row">
         <span className="label">이번 라운드 고정비 ({DISTRICT_LABELS[store.districtId]})</span>
