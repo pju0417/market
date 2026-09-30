@@ -1,3 +1,4 @@
+import type { CartCheckout, CartReceipt } from "../../types/domain.js";
 /**
  * 로컬 `GameSession`과 네트워크 `NetworkDecisionSubmitter`가 공통으로 만족하는 좁은 인터페이스
  * (Milestone 4 4-b). 세 턴 화면(CompanyTurnScreen/StoreTurnScreen/HouseholdTurnScreen)은
@@ -12,6 +13,7 @@ import type { ParticipantId } from "../../types/domain.js";
 import type { CategoryPurchaseRequest, CompanyDecisionInput, StoreDecisionInput } from "../../multiplayer/GameSession.js";
 
 export interface DecisionSubmitter {
+  checkoutCart(role: "store" | "household", id: string, cart: CartCheckout): CartReceipt | Promise<CartReceipt>;
   submitCompanyDecision(companyId: ParticipantId, input: CompanyDecisionInput): void | Promise<void>;
   submitStoreDecision(storeId: ParticipantId, input: StoreDecisionInput): void | Promise<void>;
   submitHouseholdPurchases(householdId: ParticipantId, requests: CategoryPurchaseRequest[]): void | Promise<void>;

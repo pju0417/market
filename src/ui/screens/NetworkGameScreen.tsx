@@ -3,14 +3,13 @@ import type { PlayerSlot, SessionClient } from "../network/sessionClient.js";
 import { translateNetworkError } from "../network/errorMessages.js";
 import { NetworkDecisionSubmitter } from "../network/NetworkDecisionSubmitter.js";
 import { useNetworkGameSession } from "../network/useNetworkGameSession.js";
-import { PHASE_LABELS } from "../labels.js";
+import { CityGameLayout } from "../CityGameLayout.js";
 import type { PlayerState } from "../../types/domain.js";
 import { CompanyTurnScreen } from "./CompanyTurnScreen.js";
 import { StoreTurnScreen } from "./StoreTurnScreen.js";
 import { HouseholdTurnScreen } from "./HouseholdTurnScreen.js";
 import { RoundResultScreen } from "./RoundResultScreen.js";
 import { GameOverScreen } from "./GameOverScreen.js";
-import { RoundHud } from "./RoundHud.js";
 
 interface Props {
   client: SessionClient;
@@ -51,7 +50,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
     );
   }
 
-  const { state, version, gameOver } = stateResult;
+  const { state, version, gameOver, unsubmittedParticipantIds } = stateResult;
   const player: PlayerState = { id: slot.playerId, ...slot };
   const phase = state.currentPhase;
 
@@ -63,9 +62,8 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
         </div>
       )}
 
-      {!gameOver && (
-        <RoundHud round={state.currentRound} totalRounds={state.config.totalRounds} phaseLabel={PHASE_LABELS[phase]} />
-      )}
+      <CityGameLayout state={state} player={player}>
+      {["company-turn", "store-turn", "household-turn"].includes(phase) && <p className="turn-waiting" role="status">아직 활동 중인 참가자 {unsubmittedParticipantIds.length}명 · 모두 턴을 종료하면 다음 활동으로 넘어가요.</p>}
 
       {gameOver && <GameOverScreen state={state} player={player} onRestart={() => window.location.reload()} />}
 
@@ -75,6 +73,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
           state={state}
           version={version}
           company={state.companies[slot.companyId]!}
+          disabled={!unsubmittedParticipantIds.includes(slot.companyId)}
           onSubmitted={() => {}}
         />
       )}
@@ -85,6 +84,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
           state={state}
           version={version}
           store={state.stores[slot.storeId]!}
+          disabled={!unsubmittedParticipantIds.includes(slot.storeId)}
           companies={state.companies}
           onSubmitted={() => {}}
         />
@@ -96,6 +96,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
           state={state}
           version={version}
           household={state.households[slot.householdId]!}
+          disabled={!unsubmittedParticipantIds.includes(slot.householdId)}
           stores={state.stores}
           onSubmitted={() => {}}
         />
@@ -122,6 +123,7 @@ export function NetworkGameScreen({ client, sessionId, token, slot }: Props) {
       )}
 
       {!gameOver && SILENT_PHASES.has(phase) && <div className="auto-advance">시장을 정리하고 있어요…</div>}
+      </CityGameLayout>
     </>
   );
 }

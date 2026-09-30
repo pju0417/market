@@ -1,3 +1,4 @@
+import type { CartCheckout, CartReceipt } from "../../types/domain.js";
 /**
  * `DecisionSubmitter`를 `SessionClient`(HTTP)로 구현하는 얇은 어댑터 (Milestone 4 4-b).
  * 세 턴 화면은 이 클래스를 통해 로컬 `GameSession`과 동일한 모양으로 네트워크 세션에 제출한다.
@@ -13,6 +14,10 @@ export class NetworkDecisionSubmitter implements DecisionSubmitter {
     private readonly sessionId: string,
     private readonly token: string,
   ) {}
+
+  checkoutCart(role: "store" | "household", id: string, cart: CartCheckout): Promise<CartReceipt> {
+    return this.client.checkoutCart(this.sessionId, this.token, role, id, cart);
+  }
 
   async submitCompanyDecision(companyId: ParticipantId, input: CompanyDecisionInput): Promise<void> {
     await this.client.submitCompany(this.sessionId, this.token, companyId, input);

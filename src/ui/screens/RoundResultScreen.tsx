@@ -65,6 +65,9 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
       </div>
 
       <h3>📊 전체 시장</h3>
+      {metrics.locationCosts && <details className="round-location-costs"><summary>이번 라운드 위치·운송 비용</summary>
+        {[player.companyId, player.storeId, player.householdId].map((id, index) => <p key={id}>{["기업", "가게", "가계"][index]}: 임대료 {(metrics.locationCosts?.[id]?.rent ?? 0).toFixed(2)}원 · 운송비 {(metrics.locationCosts?.[id]?.transport ?? 0).toFixed(2)}원</p>)}
+      </details>}
       <div className="stat-row">
         <span className="label">도매 거래량 / 거래액</span>
         <span className="value">

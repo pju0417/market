@@ -51,6 +51,11 @@ let configuredUuidGen: UuidGenerator | undefined;
 /** 이번 요청에서 마지막으로 다룬 세션. `configureSessionRegistryAdapter`가 매 요청 시작마다
  * 초기화하고, `createSession`/`getSession`이 호출될 때마다 갱신된다. */
 let lastTouchedSession: { sessionId: string; entry: SessionEntry } | undefined;
+let hydratedSignature: string | undefined;
+function signature(entry: SessionEntry): string {
+  return JSON.stringify([entry.session.getVersion(), entry.phaseStartedAt, entry.lastObservedPhase,
+    [...entry.lobbySubmittedPlayerIds], entry.lobbyClosedByTeacher, entry.lobbyTimerConsumed]);
+}
 
 /** `dispatch.ts`가 요청 하나를 처리하기 직전에 호출해, 이번 요청에서 쓸 게이트웨이/uuid
  * 생성기를 주입하고 이전 요청의 흔적을 지운다. */
@@ -58,15 +63,17 @@ export function configureSessionRegistryAdapter(gateway: SpreadsheetGateway, uui
   configuredGateway = gateway;
   configuredUuidGen = uuidGen;
   lastTouchedSession = undefined;
+  hydratedSignature = undefined;
 }
 
 /** `dispatch.ts`가 `handleApiRequest` 호출이 끝난 직후 호출해, 이번 요청에서 다룬 세션을
  * (있다면) 시트에 다시 쓴다. */
 export function flushSessionRegistryAdapter(): void {
-  if (configuredGateway && lastTouchedSession) {
+  if (configuredGateway && lastTouchedSession && hydratedSignature !== signature(lastTouchedSession.entry)) {
     gasSessionStore.saveSession(configuredGateway, lastTouchedSession.sessionId, toGasEntry(lastTouchedSession.entry));
   }
   lastTouchedSession = undefined;
+  hydratedSignature = undefined;
 }
 
 function requireGateway(): SpreadsheetGateway {
@@ -133,7 +140,9 @@ export function getSession(sessionId: string): SessionEntry | undefined {
   const gateway = requireGateway();
   const gasEntry = gasSessionStore.getSession(gateway, sessionId);
   if (!gasEntry) return undefined;
-  return wrapEntry(sessionId, gasEntry);
+  const entry = wrapEntry(sessionId, gasEntry);
+  hydratedSignature = signature(entry);
+  return entry;
 }
 
 export function isLobbyOpen(entry: SessionEntry): boolean {

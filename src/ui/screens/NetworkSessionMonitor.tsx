@@ -16,7 +16,7 @@ import { PHASE_LABELS } from "../labels.js";
  * 막고, `LocalStorageAdapter`가 쓰는 고정 키와 충돌하지 않기 위함).
  */
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 5_000;
 const CLOCK_TICK_MS = 1_000;
 
 function teacherTokenStorageKey(sessionId: string): string {
@@ -88,8 +88,11 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl, clie
   useEffect(() => {
     let cancelled = false;
     let sinceVersion: number | undefined;
+    let inFlight = false;
 
     async function poll(): Promise<void> {
+      if (inFlight || cancelled) return;
+      inFlight = true;
       try {
         const result = await client.getState(sessionId, sinceVersion);
         if (cancelled) return;
@@ -99,6 +102,8 @@ export function NetworkSessionMonitor({ sessionId, baseUrl = "", fetchImpl, clie
         }
       } catch (err) {
         if (!cancelled) setError(translateNetworkError(err));
+      } finally {
+        inFlight = false;
       }
     }
 

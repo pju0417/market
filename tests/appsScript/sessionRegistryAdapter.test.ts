@@ -87,14 +87,14 @@ describe("appsScript/sessionRegistryAdapter", () => {
     },
   );
 
-  it("defaults to the enabled, 120s, npc-graduated-entry server settings when timeoutSettings is omitted", () => {
+  it("defaults to the disabled, 120s, npc-graduated-entry server settings when timeoutSettings is omitted", () => {
     const gateway = new FakeSpreadsheetGateway();
     const uuidGen = makeUuidGen();
 
     configureSessionRegistryAdapter(gateway, uuidGen);
     const { entry } = createSession(2, 1);
     expect(entry.session.getSubmissionTimeoutSettings()).toEqual({
-      enabled: true,
+      enabled: false,
       timeoutMs: 120_000,
       npcGraduatedEntryEnabled: true,
     });

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { RoleArtwork } from "../GameArtwork.js";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
 import {
   companyUnitCost,
@@ -36,7 +37,7 @@ interface Props {
 
 /** 기업 턴: 생산량, 품질, 도매 판매가격을 정한다 (docs/GAME_RULES.md 1절). */
 export function CompanyTurnScreen({ session, state, version, company, onSubmitted, disabled = false }: Props) {
-  const fixedCost = computeCompanyFixedCost(company.districtId);
+  const fixedCost = computeCompanyFixedCost(company.districtId, state, company.id);
   const availableCash = computeAvailableCash(company.ledger.cash, fixedCost);
   const initialUnitCost = company.productCategoryId ? companyUnitCost(company.productCategoryId, company.districtId) : 0;
   const initialMaxAffordable = computeMaxAffordable(availableCash, initialUnitCost);
@@ -45,6 +46,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
   const [quality, setQuality] = useState(0.5);
   const [wholesalePrice, setWholesalePrice] = useState(Number((initialUnitCost * 1.4).toFixed(1)));
   const [advisorOpen, setAdvisorOpen] = useState(false);
+  const [ending, setEnding] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>(undefined);
   const [switchToCategoryId, setSwitchToCategoryId] = useState<ProductCategoryId | "">("");
   const [advertise, setAdvertise] = useState(false);
@@ -97,8 +99,52 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
     <TrendEventBanner state={state} role="company" />
     <div className="card card-role-company">
       <h2 className="card-title">
-        <span className="role-icon" aria-hidden="true">🏭</span> 기업 턴
+        <RoleArtwork role="company" /> 기업 활동 ① 생산
       </h2>
+
+
+      <label className="field">
+        <span className="field-label">생산량 (최대 {maxAffordable}개까지 살 수 있어요)</span>
+        <input
+          type="number"
+          min={0}
+          max={maxAffordable}
+          value={quantity}
+          onChange={(e) => setQuantity(Math.max(0, Number(e.target.value)))}
+        />
+      </label>
+      <label className="field production-slider">
+        <span className="field-label">생산량 조절 · {quantity}개</span>
+        <input type="range" min={0} max={maxAffordable} step={1} value={Math.min(quantity, maxAffordable)}
+          onChange={(event) => setQuantity(Number(event.target.value))} />
+        <span className="production-scale"><span>0개</span><span>{maxAffordable}개</span></span>
+      </label>
+
+      <label className="field">
+        <span className="field-label">품질 목표: {(quality * 100).toFixed(0)}점 (높을수록 생산비/가격에 영향)</span>
+        <input type="range" min={0} max={1} step={0.05} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
+      </label>
+
+      <label className="field">
+        <span className="field-label">도매 판매가격 (개당)</span>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={wholesalePrice}
+          onChange={(e) => setWholesalePrice(Math.max(0, Number(e.target.value)))}
+        />
+      </label>
+
+      <div className="stat-row">
+        <span className="label">이번 생산에 드는 돈</span>
+        <span className="value">{formatWon(productionCost)}</span>
+      </div>
+      {overBudget && (
+        <p style={{ color: "#dc2626", fontSize: 14 }}>생산량을 줄여야 해요 — 가진 돈보다 많이 쓸 수 없어요.</p>
+      )}
+
+      <details className="decision-details"><summary>자금·재고·비용 자세히 보기</summary>
       <div className="hud-chips">
         <span className="hud-chip">
           <span aria-hidden="true">💰</span> 현재 보유 현금 <strong>{formatWon(company.ledger.cash)}</strong>
@@ -127,6 +173,8 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         <span className="value">{formatWon(unitCost)}</span>
       </div>
 
+      </details>
+      <details className="decision-details"><summary>추가 설정 · 업종 변경·광고</summary>
       {canSwitchIndustry && (
         <div className="field">
           <span className="field-label">업종 전환 (4라운드부터 가능)</span>
@@ -170,46 +218,14 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         </div>
       )}
 
-      <label className="field">
-        <span className="field-label">생산량 (최대 {maxAffordable}개까지 살 수 있어요)</span>
-        <input
-          type="number"
-          min={0}
-          max={maxAffordable}
-          value={quantity}
-          onChange={(e) => setQuantity(Math.max(0, Number(e.target.value)))}
-        />
-      </label>
-
-      <label className="field">
-        <span className="field-label">품질 목표: {(quality * 100).toFixed(0)}점 (높을수록 생산비/가격에 영향)</span>
-        <input type="range" min={0} max={1} step={0.05} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
-      </label>
-
-      <label className="field">
-        <span className="field-label">도매 판매가격 (개당)</span>
-        <input
-          type="number"
-          min={0}
-          step={0.5}
-          value={wholesalePrice}
-          onChange={(e) => setWholesalePrice(Math.max(0, Number(e.target.value)))}
-        />
-      </label>
-
-      <div className="stat-row">
-        <span className="label">이번 생산에 드는 돈</span>
-        <span className="value">{formatWon(productionCost)}</span>
-      </div>
-      {overBudget && (
-        <p style={{ color: "#dc2626", fontSize: 14 }}>생산량을 줄여야 해요 — 가진 돈보다 많이 쓸 수 없어요.</p>
-      )}
-
+      </details>
+      <div className="decision-action-bar"><div className="decision-budget" aria-live="polite"><span>{quantity}개 생산 · 품질 {(quality*100).toFixed(0)}점 · 판매 {wholesalePrice.toFixed(2)}원/개</span><strong>생산 예정 {formatWon(productionCost)}</strong><span>고정비·추가비용·생산비를 뺀 잔액 {formatWon(cashAfterAd-productionCost)}</span></div>
       <button
         className="primary"
-        disabled={disabled || overBudget || company.productCategoryId === null || switchUnaffordable || adUnaffordable}
+        disabled={disabled || ending || overBudget || company.productCategoryId === null || switchUnaffordable || adUnaffordable}
         onClick={() => {
           setSubmitError(undefined);
+          setEnding(true);
           const input = {
             quantity,
             quality,
@@ -219,12 +235,14 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
           };
           Promise.resolve(session.submitCompanyDecision(company.id, input))
             .then(() => onSubmitted())
-            .catch((err: unknown) => setSubmitError(err instanceof Error ? err.message : String(err)));
+            .catch((err: unknown) => { setEnding(false); setSubmitError(err instanceof Error ? err.message : String(err)); });
         }}
       >
-        결정 제출하기
+        생산 계획 확정 · 턴 종료
       </button>
+      {(disabled || ending) && <p role="status">턴 종료를 요청했어요. 모두 마치면 다음 활동이 시작돼요.</p>}
       {submitError && <p style={{ color: "#dc2626", fontSize: 14 }}>{submitError}</p>}
+      </div>
     </div>
 
     <div className="card">

@@ -1,3 +1,4 @@
+import { readLiveSnapshot, writeLiveSnapshot } from "./liveSnapshot.js";
 /**
  * Apps Script용 세션 저장소 (Milestone 5 1부, D-032). `src/server/sessionRegistry.ts`(로컬
  * 폴링 서버, 참고만 함 — 그대로 베끼지 않음)와 같은 역할을 하지만, Apps Script는 요청마다
@@ -30,18 +31,9 @@ import type { ParticipantId, RoundPhase } from "../types/domain.js";
  * `src/appsScript`는 `src/server`에 의존하지 않는다는 원칙(D-032)에 따라 독립적으로 둔다. */
 export const DEFAULT_LOBBY_TIMEOUT_MS = 180_000;
 
-/**
- * 교사가 세션 생성 시 제출 제한시간 설정을 아예 넘기지 않았을 때 쓰는 기본값 (구매 매칭
- * 알고리즘 재설계 Stage 2). `src/server/timeoutConfig.ts`의
- * `DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS`와 값은 같지만, `src/appsScript`는
- * `src/server`에 의존하지 않는다는 원칙(D-032)에 따라 독립적으로 둔다 — 다인원 Apps Script
- * 세션도 로컬 서버와 동일하게 기본적으로 제출 제한시간을 켠 채(enabled=true) 시작해야
- * D-029가 이미 확정한 동작과 하위호환된다. `GameSession.DEFAULT_LOCAL_SUBMISSION_TIMEOUT_SETTINGS`
- * (로컬 1인 플레이 기본값, enabled=false)와 혼동하지 마라 — Apps Script는 항상 다인원
- * 세션이다.
- */
+/** 모든 참가자의 명시적인 턴 종료를 기다린다. 교사는 제한시간을 별도로 켤 수 있다. */
 export const DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS: SubmissionTimeoutSettings = {
-  enabled: true,
+  enabled: false,
   timeoutMs: 120_000,
   npcGraduatedEntryEnabled: true,
 };
@@ -116,6 +108,7 @@ export function createSession(
     undefined,
     timeoutSettings ?? DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS,
   );
+  session.enableCityEconomy();
   const entry: SessionEntry = {
     session,
     teacherToken: uuidGen(),
@@ -142,12 +135,14 @@ export function getSession(gateway: SpreadsheetGateway, sessionId: string): Sess
   if (!liveStateRow) return undefined;
 
   const roundMetrics = readRoundMetricsForSession(gateway, sessionId);
-  const state = deserializeLiveState(liveStateRow.json!, roundMetrics);
+  const raw = readLiveSnapshot(gateway, liveStateRow.json!);
+  const envelope = JSON.parse(raw) as { liveSnapshotV1?: string; pending?: PendingSubmissionsSnapshot };
+  const state = deserializeLiveState(envelope.liveSnapshotV1 ?? raw, roundMetrics);
 
   const pendingRow = gateway.findRow(PENDING_SUBMISSIONS_SHEET, "sessionId", sessionId);
-  const pending: PendingSubmissionsSnapshot | undefined = pendingRow
+  const pending: PendingSubmissionsSnapshot | undefined = envelope.pending ?? (pendingRow
     ? (JSON.parse(pendingRow.json!) as PendingSubmissionsSnapshot)
-    : undefined;
+    : undefined);
 
   // submissionTimeoutEnabled 컬럼이 아예 없으면(이 필드가 생기기 전에 만들어진 세션 행)
   // DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS로 안전하게 폴백한다.
@@ -182,10 +177,10 @@ export function getSession(gateway: SpreadsheetGateway, sessionId: string): Sess
 export function saveSession(gateway: SpreadsheetGateway, sessionId: string, entry: SessionEntry): void {
   const state = entry.session.getState();
 
-  gateway.upsertRow(LIVE_STATE_SHEET, "sessionId", sessionId, {
-    sessionId,
-    json: serializeLiveState(state),
-  });
+  // State, receipts, end-turn submissions and polling version commit together.
+  writeLiveSnapshot(gateway, sessionId, JSON.stringify({
+    liveSnapshotV1: serializeLiveState(state), pending: entry.session.exportPendingSubmissions(),
+  }));
 
   const alreadyStoredRounds = new Set(
     gateway

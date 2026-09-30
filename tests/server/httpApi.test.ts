@@ -1,3 +1,5 @@
+import { deliveredListings } from "../../src/economy/city.js";
+import { eligibleWholesaleListingsForStore } from "../../src/economy/market.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleApiRequest, type ApiRequest } from "../../src/server/httpApi.js";
 import { getSession } from "../../src/server/sessionRegistry.js";
@@ -42,6 +44,8 @@ async function createTestSession(
       body: {
         studentCount,
         rngSeed: 1,
+        // These existing timeout tests opt into the optional timer explicitly.
+        submissionTimeoutEnabled: true,
         ...(options.submissionTimeoutEnabled !== undefined && { submissionTimeoutEnabled: options.submissionTimeoutEnabled }),
         ...(options.submissionTimeoutMs !== undefined && { submissionTimeoutMs: options.submissionTimeoutMs }),
         ...(options.npcGraduatedEntryEnabled !== undefined && { npcGraduatedEntryEnabled: options.npcGraduatedEntryEnabled }),
@@ -1442,4 +1446,42 @@ describe("Milestone 4 6단계: 로비 종료 시점에 미제출 학생을 영�
       expect(entry.session.getPlayers().map((p) => p.id)).toEqual(["student-1"]);
     },
   );
+});
+
+
+describe("authenticated cart checkout API", () => {
+  it("commits and retries a cart without ending the turn, rejects another student's id", async () => {
+    const { sessionId } = await createTestSession(2, { submissionTimeoutEnabled: false });
+    const session = getSession(sessionId)!.session;
+    await session.advancePhase(true);
+    await session.advanceUntilInputRequired();
+    const player = session.getPlayers()[0]!;
+    const join = await handleApiRequest(req({ method: "POST", path: `/api/sessions/${sessionId}/join`, body: { playerId: player.id } }));
+    const token = (join.body as { token: string }).token;
+    const state = session.getState();
+    const store = state.stores[player.storeId]!;
+    const listing = deliveredListings(state, store.id, eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies)).find(l => l.categoryId === store.specialtyCategoryId && l.quantityAvailable > 0)!;
+    const body = { storeId: store.id, cart: { requestId: "http-cart", round: 1, retailPrice: 20, lines: [{ listingId: listing.id, quantity: 1, unitPrice: listing.price }] } };
+    const request = req({ method: "POST", path: `/api/sessions/${sessionId}/submit/store`, headers: { authorization: `Bearer ${token}` }, body });
+    const first = await handleApiRequest(request);
+    expect(first.status).toBe(200);
+    expect(session.getState().currentPhase).toBe("store-turn");
+    expect(session.getUnsubmittedParticipantIds()).toContain(store.id);
+    const after = JSON.stringify(session.getState());
+    expect((await handleApiRequest(request)).body).toEqual(first.body);
+    expect(JSON.stringify(session.getState())).toBe(after);
+    const forged = await handleApiRequest({ ...request, body: { ...body, storeId: session.getPlayers()[1]!.storeId } });
+    expect(forged.status).toBe(403);
+    expect(JSON.stringify(session.getState())).toBe(after);
+    const end = await handleApiRequest({ ...request, body: { storeId: store.id, input: { retailPrice: 20 } } });
+    expect(end.status).toBe(200);
+    expect(session.getState().currentPhase).toBe("store-turn");
+    expect(session.getUnsubmittedParticipantIds()).not.toContain(store.id);
+  });
+
+  it("new sessions wait for explicit end-turn by default", async () => {
+    const response = await handleApiRequest(req({ method: "POST", path: "/api/sessions", body: { studentCount: 2, rngSeed: 42 } }));
+    const id = (response.body as { sessionId: string }).sessionId;
+    expect(getSession(id)!.session.getSubmissionTimeoutSettings().enabled).toBe(false);
+  });
 });

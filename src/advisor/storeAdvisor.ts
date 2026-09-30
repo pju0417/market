@@ -20,6 +20,7 @@
  */
 import { DISTRICTS } from "../economy/config.js";
 import { computeStoreFixedCost } from "../economy/costs.js";
+import { cityRent } from "../economy/city.js";
 import { computeCategoryAverages, computeStoreCompetitorCount } from "../economy/marketStats.js";
 import type { GameState, ParticipantId } from "../types/domain.js";
 import { DEFAULT_ADVISOR_RULES, type AdvisorRules } from "./rules.js";
@@ -131,8 +132,8 @@ export function analyzeStoreTurn(
 
   const district = DISTRICTS[store.districtId];
   situationSummary.push(
-    `현재 상권(${DISTRICT_NAMES_KO[store.districtId]})의 임대료 배율은 ${district.rentMultiplier.toFixed(1)}배입니다 ` +
-      "(상권은 임대료 등 고정비에만 영향을 주며, 판매량에 직접 영향을 주지는 않습니다).",
+    state.city ? `현재 지도 위치의 임대료는 라운드당 ${formatWon(cityRent(state, store.id, "store", store.districtId).total)}입니다. 도심 접근성·주변 밀도·지난 라운드 혼잡도를 반영하며, 매입 예산에는 운송비도 필요합니다.` :
+      `현재 상권(${DISTRICT_NAMES_KO[store.districtId]})의 임대료 배율은 ${district.rentMultiplier.toFixed(1)}배입니다 (상권은 임대료 등 고정비에만 영향을 주며, 판매량에 직접 영향을 주지는 않습니다).`,
   );
 
   const causeHypotheses: CauseHypothesis[] = [];
@@ -218,7 +219,7 @@ export function analyzeStoreTurn(
     });
   }
 
-  const fixedCost = computeStoreFixedCost(store.districtId);
+  const fixedCost = computeStoreFixedCost(store.districtId, state, store.id);
   const cash = store.ledger.cash;
   const isFixedCostBurdenHigh = cash > 0 ? fixedCost / cash >= rules.highFixedCostToCashRatio : fixedCost > 0;
   if (isFixedCostBurdenHigh) {

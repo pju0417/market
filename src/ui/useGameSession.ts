@@ -26,6 +26,7 @@ export function useGameSession(init: GameInit) {
       "resumeState" in init
         ? GameSession.resumeFromState(init.resumeState)
         : new GameSession(init.rngSeed, init.choices, undefined, 1, undefined, init.timeoutSettings);
+    if (!("resumeState" in init)) s.enableCityEconomy();
     s.enableAutoSave(new LocalStorageAdapter(window.localStorage));
     return s;
   });

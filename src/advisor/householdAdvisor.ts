@@ -33,8 +33,9 @@ export function analyzeHouseholdTurn(
   }
 
   const effectiveBudgetPerRound = household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound);
-  const totalBudget = computeHouseholdTotalBudget(household.ledger.cash, effectiveBudgetPerRound);
-  const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
+  const rent = cityRent(state, household.id, "household").total;
+  const totalBudget = Math.max(0, computeHouseholdTotalBudget(household.ledger.cash, effectiveBudgetPerRound) - rent);
+  const eligible = deliveredListings(state, household.id, eligibleRetailListingsForHousehold(household, state.retailListings, state.stores));
 
   const lastMetrics = state.roundMetrics.at(-1);
   const hasHistory = lastMetrics !== undefined && householdId in lastMetrics.householdSpend;
@@ -59,7 +60,7 @@ export function analyzeHouseholdTurn(
   const situationSummary: string[] = [];
   situationSummary.push(
     `현재 보유 현금(저축)은 ${formatWon(household.ledger.cash)}이며, 이번 라운드 받을 용돈(${formatWon(effectiveBudgetPerRound)})을 더하면 ` +
-      `이번 라운드 쓸 수 있는 돈은 ${formatWon(totalBudget)}입니다.`,
+      `${state.city ? `임대료 ${formatWon(rent)}을 제외하고 ` : ""}이번 라운드 쓸 수 있는 돈은 ${formatWon(totalBudget)}입니다.${state.city ? " 상품 가격에는 운송비가 포함돼요." : ""}`,
   );
 
   if (history !== undefined) {
@@ -233,3 +234,4 @@ function buildDiversityOption(isConsumptionConcentrated: boolean): AdviceOption 
     risks: ["새로운 상품을 시도하지 않으면 더 나은 선택을 놓칠 수 있습니다."],
   };
 }
+import { cityRent, deliveredListings } from "../economy/city.js";

@@ -19,7 +19,7 @@ interface Props {
 export function TeacherSessionScreen({ client }: Props) {
   const [studentCount, setStudentCount] = useState(4);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [timeoutEnabled, setTimeoutEnabled] = useState(true);
+  const [timeoutEnabled, setTimeoutEnabled] = useState(false);
   const [timeoutSeconds, setTimeoutSeconds] = useState(120);
   const [npcGraduatedEntryEnabled, setNpcGraduatedEntryEnabled] = useState(true);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);

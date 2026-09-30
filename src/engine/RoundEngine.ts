@@ -1,4 +1,5 @@
 import type { GameState, RoundPhase } from "../types/domain.js";
+import { prepareCityRound } from "../economy/city.js";
 
 /**
  * docs/ROUND_FLOW.md 에 정의된 고정 순서. 임의로 순서를 바꾸거나 단계를 생략하지 않는다.
@@ -43,6 +44,7 @@ export class RoundEngine {
 
   /** 한 라운드(라운드 내부 10단계)를 순서대로 실행한다. */
   async runRound(): Promise<RoundPhase[]> {
+    prepareCityRound(this.state);
     const executed: RoundPhase[] = [];
     for (const phase of ROUND_PHASES) {
       this.state.currentPhase = phase;
@@ -60,6 +62,7 @@ export class RoundEngine {
     while (this.state.currentRound <= this.state.config.totalRounds) {
       await this.runRound();
       this.state.currentRound += 1;
+      prepareCityRound(this.state);
     }
   }
 
@@ -87,6 +90,7 @@ export class RoundEngine {
     const isLastPhaseOfRound = index === ROUND_PHASES.length - 1;
     if (isLastPhaseOfRound) {
       this.state.currentRound += 1;
+      prepareCityRound(this.state);
       if (this.state.currentRound <= this.state.config.totalRounds) {
         this.state.currentPhase = ROUND_PHASES[0]!;
       }

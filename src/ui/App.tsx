@@ -4,7 +4,8 @@ import { GameSession } from "../multiplayer/GameSession.js";
 import { LocalStorageAdapter } from "../storage/LocalStorageAdapter.js";
 import type { GameState, RoundPhase } from "../types/domain.js";
 import "./App.css";
-import { PHASE_LABELS } from "./labels.js";
+import { villageArtwork } from "./GameArtwork.js";
+import { CityGameLayout } from "./CityGameLayout.js";
 import type { PlayerSlot } from "./network/sessionClient.js";
 import type { NetworkBackend } from "./network/backend.js";
 import { AppsScriptNetworkGameScreen } from "./screens/AppsScriptNetworkGameScreen.js";
@@ -19,7 +20,6 @@ import { NetworkGameScreen } from "./screens/NetworkGameScreen.js";
 import { NetworkJoinScreen } from "./screens/NetworkJoinScreen.js";
 import { NetworkLobbyScreen } from "./screens/NetworkLobbyScreen.js";
 import { ResumePromptScreen } from "./screens/ResumePromptScreen.js";
-import { RoundHud } from "./screens/RoundHud.js";
 import { RoundResultScreen } from "./screens/RoundResultScreen.js";
 import { SetupScreen } from "./screens/SetupScreen.js";
 import { StoreTurnScreen } from "./screens/StoreTurnScreen.js";
@@ -160,14 +160,11 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
   return (
     <>
       <div style={{ display: teacherViewOpen ? "none" : undefined }}>
-        {!gameOver && (
-          <RoundHud round={state.currentRound} totalRounds={state.config.totalRounds} phaseLabel={PHASE_LABELS[phase]} />
-        )}
-        <div className="toolbar">
+        <CityGameLayout state={state} player={player} teacherControl={
           <button className="secondary" onClick={() => setTeacherViewOpen(true)}>
             👩‍🏫 교사 화면 보기
           </button>
-        </div>
+        }>
 
         {gameOver && <GameOverScreen state={state} player={player} onRestart={onRestart} />}
 
@@ -222,6 +219,7 @@ function GameScreen({ init, onRestart }: { init: GameInit; onRestart: () => void
         {!gameOver && SILENT_AUTO_PHASES.has(phase) && (
           <div className="auto-advance">시장을 정리하고 있어요…</div>
         )}
+        </CityGameLayout>
       </div>
 
       {teacherViewOpen && (
@@ -253,9 +251,9 @@ export function App() {
 
       {mode.kind === "mode-select" && (
         <div className="title-screen">
-          <div className="title-mascots" aria-hidden="true">
-            🏭 🏪 🏠
-          </div>
+          <img className="village-artwork" src={villageArtwork}
+            alt="물건을 만드는 기업, 물건을 파는 가게, 생활에 필요한 물건을 사는 가계가 모인 경제 마을"
+            width={1536} height={1024} />
           <p className="title-tagline">만들고, 팔고, 사면서 시장을 배워요!</p>
           <div className="mode-cards">
             <button className="mode-card mode-card-solo" onClick={() => setMode({ kind: "local" })}>

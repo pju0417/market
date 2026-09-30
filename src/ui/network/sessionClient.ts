@@ -1,3 +1,4 @@
+import type { CartCheckout, CartReceipt } from "../../types/domain.js";
 /**
  * `src/server/httpApi.ts`의 HTTP API를 감싸는 얇은 래퍼 (Milestone 4 3단계 확인용).
  *
@@ -162,6 +163,13 @@ export class SessionClient {
   getState(sessionId: string, since?: number): Promise<PollResult> {
     const query = since !== undefined ? `?since=${since}` : "";
     return this.request<PollResult>(`/api/sessions/${sessionId}/state${query}`);
+  }
+
+  checkoutCart(sessionId: string, token: string, role: "store" | "household", id: string, cart: CartCheckout): Promise<CartReceipt> {
+    return this.request(`/api/sessions/${sessionId}/submit/${role}`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ [role + "Id"]: id, cart }),
+    });
   }
 
   submitCompany(

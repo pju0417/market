@@ -9,6 +9,9 @@ import {
   type SessionEntry,
 } from "../../src/appsScript/gasSessionStore.js";
 import type { SpreadsheetGateway, UuidGenerator } from "../../src/appsScript/hostInterfaces.js";
+import { deliveredListings } from "../../src/economy/city.js";
+import { eligibleWholesaleListingsForStore } from "../../src/economy/market.js";
+import { readLiveSnapshot, writeLiveSnapshot } from "../../src/appsScript/liveSnapshot.js";
 
 /**
  * 인메모리 `SpreadsheetGateway` 테스트 더블. 실제 시트처럼 "행 = 컬럼명→문자열 값" 모양을
@@ -64,6 +67,50 @@ function makeUuidGen(): UuidGenerator {
 }
 
 describe("appsScript/gasSessionStore", () => {
+  it("preserves a cart receipt, monotonic polling version and end-turn state across fresh requests", async () => {
+    const gateway = new FakeSpreadsheetGateway();
+    const { sessionId, entry } = createSession(gateway, makeUuidGen(), 2, 42);
+    await entry.session.advancePhase(true);
+    await entry.session.advanceUntilInputRequired();
+    const state = entry.session.getState();
+    const player = entry.session.getPlayers()[0]!;
+    const store = state.stores[player.storeId]!;
+    const listing = deliveredListings(state, store.id, eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies)).find(l => l.categoryId === store.specialtyCategoryId && l.quantityAvailable > 0)!;
+    const request = { requestId: "persisted-order", round: 1, lines: [{ listingId: listing.id, quantity: 1, unitPrice: listing.price }] };
+    const receipt = entry.session.checkoutCart("store", store.id, request);
+    saveSession(gateway, sessionId, entry);
+    const reloaded = getSession(gateway, sessionId)!;
+    expect(reloaded.session.getVersion()).toBe(entry.session.getVersion());
+    expect(reloaded.session.checkoutCart("store", store.id, request)).toEqual(receipt);
+    expect(reloaded.session.getState().stores[store.id]!.ledger.cash).toBe(receipt.remainingCash);
+    expect(reloaded.session.getUnsubmittedParticipantIds()).toContain(store.id);
+    reloaded.session.submitStoreDecision(store.id, { retailPrice: 15 });
+    saveSession(gateway, sessionId, reloaded);
+    const ended = getSession(gateway, sessionId)!;
+    expect(ended.session.getVersion()).toBeGreaterThan(entry.session.getVersion());
+    expect(ended.session.getUnsubmittedParticipantIds()).not.toContain(store.id);
+    expect(ended.session.getState().currentPhase).toBe("store-turn");
+  });
+
+  it("splits oversized snapshots, round-trips exactly and keeps the prior snapshot if a chunk write fails", () => {
+    const gateway = new FakeSpreadsheetGateway();
+    const first = JSON.stringify({ text: "가".repeat(95_000) });
+    writeLiveSnapshot(gateway, "large-session", first);
+    const manifest = gateway.findRow("LiveState", "sessionId", "large-session")!.json!;
+    expect(readLiveSnapshot(gateway, manifest)).toBe(first);
+    expect(gateway.readRows("LiveStateChunks").every(row => row.json!.length <= 40_000)).toBe(true);
+    const original = gateway.upsertRow.bind(gateway);
+    gateway.upsertRow = (sheet, column, value, row) => {
+      if (sheet === "LiveStateChunks") throw new Error("simulated write failure");
+      original(sheet, column, value, row);
+    };
+    expect(() => writeLiveSnapshot(gateway, "large-session", JSON.stringify({ text: "나".repeat(95_000) }))).toThrow();
+    expect(readLiveSnapshot(gateway, gateway.findRow("LiveState", "sessionId", "large-session")!.json!)).toBe(first);
+    gateway.upsertRow = original;
+    writeLiveSnapshot(gateway, "large-session", JSON.stringify({ done: true }));
+    expect(gateway.readRows("LiveStateChunks")).toHaveLength(0);
+  });
+
   it("persists a created session so a brand-new hydrate (simulating a fresh Apps Script request) sees it", () => {
     const gateway = new FakeSpreadsheetGateway();
     const uuidGen = makeUuidGen();
@@ -83,7 +130,7 @@ describe("appsScript/gasSessionStore", () => {
   });
 
   it(
-    "defaults to DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS (enabled) when createSession is called " +
+    "defaults to DEFAULT_GAS_SUBMISSION_TIMEOUT_SETTINGS (disabled) when createSession is called " +
       "without timeoutSettings, and this survives a hydrate round-trip (구매 매칭 알고리즘 재설계 " +
       "Stage 2 — code-reviewer critical bug: Apps Script sessions were silently dropping the " +
       "server-appropriate default and falling back to GameSession's local single-player default)",
@@ -93,7 +140,7 @@ describe("appsScript/gasSessionStore", () => {
 
       const { sessionId, entry } = createSession(gateway, uuidGen, 2, 1);
       expect(entry.session.getSubmissionTimeoutSettings()).toEqual({
-        enabled: true,
+        enabled: false,
         timeoutMs: 120_000,
         npcGraduatedEntryEnabled: true,
       });
@@ -101,7 +148,7 @@ describe("appsScript/gasSessionStore", () => {
 
       const reloaded = getSession(gateway, sessionId)!;
       expect(reloaded.session.getSubmissionTimeoutSettings()).toEqual({
-        enabled: true,
+        enabled: false,
         timeoutMs: 120_000,
         npcGraduatedEntryEnabled: true,
       });

@@ -9,7 +9,6 @@
 import {
   ALL_STRATEGIES,
   COSTS,
-  DISTRICTS,
   DISTRICT_IDS,
   ESSENTIAL_CATEGORY_IDS,
   essentialSatisfactionPenalty,
@@ -17,12 +16,13 @@ import {
   STORE_STRATEGY_PRESETS,
 } from "../economy/config.js";
 import { incomeEventBudgetMultiplier } from "../economy/incomeEvent.js";
+import { cityRent, deliveredListings, recordTransport } from "../economy/city.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
 import { getActiveTrendEvent } from "../economy/trendEvent.js";
 import { computeCategoryClearingSummary } from "../economy/marketStats.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
-import { applyFixedCosts, chargeDiscretionary, credit } from "../economy/settlement.js";
+import { applyFixedCosts, chargeCapped, chargeDiscretionary, credit } from "../economy/settlement.js";
 import {
   resolveCompanyAdvertising,
   resolveCompanyDecision,
@@ -39,23 +39,25 @@ import {
   decideCompanyAdvertising,
   decideCompanyIndustrySwitch,
   decideCompanyMarketEventSwitch,
+  MAX_HOUSEHOLD_PURCHASE_UNITS,
   decideStoreAdvertising,
   decideStorePurchases,
   decideStoreSpecialtyDeviation,
 } from "../npc/decisions.js";
 import { planNpcBackfill } from "../npc/backfill.js";
 import type {
+  RoundAccumulator,
   CategoryClearingSummary,
   CompanyState,
   GameState,
   HouseholdState,
   ParticipantId,
   ProductCategoryId,
-  RetailListing,
   RoundMetrics,
   StoreState,
-  WholesaleListing,
 } from "../types/domain.js";
+import { validateCart } from "../economy/cart.js";
+import type { CartCheckout, CartLine } from "../types/domain.js";
 import { PhaseHandlers, RoundEngine } from "./RoundEngine.js";
 
 function makeLedger(cash: number) {
@@ -197,36 +199,6 @@ export function buildInitialGameState(studentCount: number, rngSeed: number): Ga
   };
 }
 
-interface RoundAccumulator {
-  cashSnapshotCompany: Record<ParticipantId, number>;
-  cashSnapshotStore: Record<ParticipantId, number>;
-  wholesaleRevenueByCompany: Record<ParticipantId, number>;
-  retailRevenueByStore: Record<ParticipantId, number>;
-  wholesaleVolume: number;
-  wholesaleValue: number;
-  retailVolume: number;
-  retailValue: number;
-  /** advisor(전략 비서)용 계측치. 시장 지표 계산 자체에는 쓰이지 않는다 (docs/DECISIONS.md 참고: 새 필드 추가만, 기존 계산 순서는 불변). */
-  companyUnitsProduced: Record<ParticipantId, number>;
-  companyUnitsSoldWholesale: Record<ParticipantId, number>;
-  storeUnitsPurchased: Record<ParticipantId, number>;
-  storeWholesaleSpend: Record<ParticipantId, number>;
-  storeUnitsSoldRetail: Record<ParticipantId, number>;
-  /** 가게별 × 공급 기업별 이번 라운드 매입 지출 (storeSupplierCount/storeTopSupplierSpendShare 계산용). */
-  storeSpendByCompany: Record<ParticipantId, Record<ParticipantId, number>>;
-  householdSpend: Record<ParticipantId, number>;
-  householdUnitsBought: Record<ParticipantId, number>;
-  /** 가계별 × 카테고리별 이번 라운드 지출 (householdCategoryCount/householdTopCategorySpendShare 계산용). */
-  householdSpendByCategory: Record<ParticipantId, Partial<Record<ProductCategoryId, number>>>;
-  householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
-  /** D-026: 이번 라운드 가계 소비 처리(household-turn/npc-consumer-behavior 공용) 시작 시점의
-   *  state.retailListings 스냅샷. null이면 아직 이번 라운드에 계산 안 함 — runConsumerPurchases가
-   *  라운드 내 처음 호출될 때 그 자리에서 한 번만 채운다. */
-  roundStartRetailListings: RetailListing[] | null;
-  /** 구매 매칭 알고리즘 재설계 Stage 1: runStoreTurn 시작 시점의 state.wholesaleListings
-   *  스냅샷. roundStartRetailListings와 대칭 — wholesaleCategoryClearing 계산에 쓰인다. */
-  roundStartWholesaleListings: WholesaleListing[] | null;
-}
 
 function freshAccumulator(): RoundAccumulator {
   return {
@@ -371,15 +343,16 @@ export function orderBuyersForTurn<Id extends ParticipantId>(
  * 쓰는 경로, `createAutoPlayPhaseHandlers`가 이 형태로 호출한다). Milestone 2의
  * `src/multiplayer/GameSession`은 `decisionSource`를 넘겨 특정 참여자만 사람이 조종하게 한다.
  */
-export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSource): PhaseHandlers {
+export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSource) {
   let acc = freshAccumulator();
 
   function runCompanyTurn(state: GameState): void {
     acc = freshAccumulator();
+    state.shopping = { round: state.currentRound, prepared: {}, units: {}, receipts: {} };
     for (const company of Object.values(state.companies)) {
       acc.cashSnapshotCompany[company.id] = company.ledger.cash;
-      const district = DISTRICTS[company.districtId];
-      applyFixedCosts(company.ledger, COSTS.baseLaborCostCompany, COSTS.baseRentCompany * district.rentMultiplier);
+      const fixed = applyFixedCosts(company.ledger, COSTS.baseLaborCostCompany, cityRent(state, company.id, "company", company.districtId).total);
+      if (state.city) (state.city.costs[company.id] ??= { rent: 0, transport: 0 }).rent += fixed.rentPaid;
 
       // 업종 전환은 생산 결정보다 먼저 처리한다 — 전환이 확정되면 그 즉시 productCategoryId가
       // 바뀌고 재고/현금이 조정되므로, 이어지는 resolveCompanyDecision은 새 카테고리의 단가로
@@ -451,7 +424,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     }
   }
 
-  function runStoreTurn(state: GameState): void {
+  function runStoreTurn(state: GameState, cart?: { id: ParticipantId; checkout: CartCheckout }): void {
     if (acc.roundStartWholesaleListings === null) {
       acc.roundStartWholesaleListings = state.wholesaleListings.map((l) => ({ ...l }));
     }
@@ -463,41 +436,50 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       (id) => decisionSource?.getStorePurchaseRequest(id) !== undefined,
       (id) => decisionSource?.getStoreSubmissionReceivedAt(id),
     );
-    for (const storeId of orderedStoreIds) {
+    for (const storeId of cart ? [cart.id] : orderedStoreIds) {
       const store = state.stores[storeId]!;
-      const district = DISTRICTS[store.districtId];
-      applyFixedCosts(store.ledger, COSTS.baseLaborCostStore, COSTS.baseRentStore * district.rentMultiplier);
-
-      // 판매 카테고리 변경(전문 업종 이탈)도 매입보다 먼저 처리한다 — 변경이 확정되면 그 즉시
-      // currentSellingCategoryId가 바뀌고 재고가 리셋되므로, 이어지는 매입은 새 카테고리
-      // 기준으로 이뤄진다. 사람 입력이 아예 없는 완전 봇 참가자만 NPC 전환 로직을 탄다(위
-      // 기업 전환과 같은 원칙).
-      const requested = decisionSource?.getStorePurchaseRequest(store.id);
-      if (requested === undefined) {
-        decideStoreSpecialtyDeviation(store, state, rng);
-      } else {
-        resolveStoreCategorySwitch(store, state.currentRound, requested.sellingCategoryId);
+      const prepared = state.shopping?.prepared[storeId] === true;
+      const requested: StoreDecisionInput | undefined = cart ? cart.checkout : decisionSource?.getStorePurchaseRequest(store.id);
+      if (prepared && !cart) {
+        if (requested?.retailPrice !== undefined) store.retailPrice = Math.max(0, requested.retailPrice);
+        continue;
       }
+      if (!prepared) {
+        const fixed = applyFixedCosts(store.ledger, COSTS.baseLaborCostStore, cityRent(state, store.id, "store", store.districtId).total);
+        if (state.city) (state.city.costs[store.id] ??= { rent: 0, transport: 0 }).rent += fixed.rentPaid;
 
-      // 광고(Milestone 6, docs/DECISIONS.md D-040)는 판매 카테고리 변경 다음, 매입 결정보다
-      // 먼저 처리한다 — 기업 턴과 같은 순서 원칙(광고비 차감 이후의 store.ledger.cash를
-      // 매입 예산으로 쓴다).
-      if (requested === undefined) {
-        decideStoreAdvertising(store, state.currentRound);
-      } else {
-        resolveStoreAdvertising(store, state.currentRound, requested.advertise);
+        // 판매 카테고리 변경(전문 업종 이탈)도 매입보다 먼저 처리한다 — 변경이 확정되면 그 즉시
+        // currentSellingCategoryId가 바뀌고 재고가 리셋되므로, 이어지는 매입은 새 카테고리
+        // 기준으로 이뤄진다. 사람 입력이 아예 없는 완전 봇 참가자만 NPC 전환 로직을 탄다(위
+        // 기업 전환과 같은 원칙).
+        if (requested === undefined) {
+          decideStoreSpecialtyDeviation(store, state, rng);
+        } else {
+          resolveStoreCategorySwitch(store, state.currentRound, requested.sellingCategoryId);
+        }
+
+        // 광고(Milestone 6, docs/DECISIONS.md D-040)는 판매 카테고리 변경 다음, 매입 결정보다
+        // 먼저 처리한다 — 기업 턴과 같은 순서 원칙(광고비 차감 이후의 store.ledger.cash를
+        // 매입 예산으로 쓴다).
+        if (requested === undefined) {
+          decideStoreAdvertising(store, state.currentRound);
+        } else {
+          resolveStoreAdvertising(store, state.currentRound, requested.advertise);
+        }
+
       }
-
-      const eligible = eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies);
+      const eligible = deliveredListings(state, store.id, eligibleWholesaleListingsForStore(store, state.wholesaleListings, state.companies));
       // 봇 위임 여부는 requested(=이 가게의 StoreDecisionInput) 자체가 undefined인지로만
       // 판단한다 — requested가 있는데 purchaseRequest만 비어 있으면(사람이 실제로 제출했지만
       // 이번 라운드는 안 사기로 함) resolveStorePurchases가 "안 삼"으로 처리하며, 봇으로
       // 위임하지 않는다 (구매 매칭 알고리즘 재설계 Stage 1, 계약 정정).
-      const decision =
-        requested === undefined
+      const decision = cart
+        ? { purchases: validateCart(cart.checkout.lines, eligible.filter(l => l.categoryId === (store.currentSellingCategoryId ?? store.specialtyCategoryId)), store.ledger.cash) }
+        : requested === undefined
           ? decideStorePurchases(store, store.ledger.cash, eligible, state.companies, rng)
           : resolveStorePurchases(store, store.ledger.cash, eligible, state.companies, requested.purchaseRequest, rng);
 
+      if (cart && state.shopping) state.shopping.prepared[storeId] = true;
       let totalCost = 0;
       let totalQty = 0;
       for (const purchase of decision.purchases) {
@@ -507,12 +489,14 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
         const cost = purchase.quantity * purchase.unitPrice;
         chargeDiscretionary(store.ledger, cost);
-        const distributionCost = purchase.quantity * COSTS.wholesaleDistributionCostPerUnit;
-        credit(company.ledger, cost - distributionCost);
+        const goodsRevenue = purchase.quantity * listing.price;
+        const distributionCost = state.city ? 0 : purchase.quantity * COSTS.wholesaleDistributionCostPerUnit;
+        credit(company.ledger, goodsRevenue - distributionCost);
+        recordTransport(state, company.id, store.id, purchase.quantity, "wholesale");
 
-        acc.wholesaleRevenueByCompany[company.id] = (acc.wholesaleRevenueByCompany[company.id] ?? 0) + cost;
+        acc.wholesaleRevenueByCompany[company.id] = (acc.wholesaleRevenueByCompany[company.id] ?? 0) + goodsRevenue;
         acc.wholesaleVolume += purchase.quantity;
-        acc.wholesaleValue += cost;
+        acc.wholesaleValue += goodsRevenue;
         acc.companyUnitsSoldWholesale[company.id] = (acc.companyUnitsSoldWholesale[company.id] ?? 0) + purchase.quantity;
         const spendByCompany = (acc.storeSpendByCompany[store.id] ??= {});
         spendByCompany[company.id] = (spendByCompany[company.id] ?? 0) + cost;
@@ -562,7 +546,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     }
   }
 
-  function runConsumerPurchases(state: GameState, householdIds: readonly ParticipantId[]): void {
+  function runConsumerPurchases(state: GameState, householdIds: readonly ParticipantId[], cart?: CartLine[]): void {
     if (acc.roundStartRetailListings === null) {
       acc.roundStartRetailListings = state.retailListings.map((l) => ({ ...l }));
     }
@@ -578,11 +562,19 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     );
     for (const householdId of orderedIds) {
       const household = state.households[householdId]!;
-      credit(household.ledger, household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound));
+      const prepared = state.shopping?.prepared[householdId] === true;
+      if (prepared && !cart) continue;
+      if (!prepared) {
+        credit(household.ledger, household.budgetPerRound * incomeEventBudgetMultiplier(state.currentRound));
+        if (state.city) {
+          const rent = chargeCapped(household.ledger, cityRent(state, household.id, "household").total);
+          (state.city.costs[household.id] ??= { rent: 0, transport: 0 }).rent += rent;
+        }
 
-      const eligible = eligibleRetailListingsForHousehold(household, state.retailListings, state.stores);
+      }
+      const eligible = deliveredListings(state, household.id, eligibleRetailListingsForHousehold(household, state.retailListings, state.stores));
       const requested = decisionSource?.getHouseholdPurchaseRequest(household.id);
-      const decision = resolveHouseholdPurchases(
+      const decision = cart ? { purchases: validateCart(cart, eligible, household.ledger.cash, MAX_HOUSEHOLD_PURCHASE_UNITS - (state.shopping?.units[householdId] ?? 0)) } : resolveHouseholdPurchases(
         household,
         household.ledger.cash,
         eligible,
@@ -592,9 +584,14 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         trendEvent,
       );
 
-      let qualityUnits = 0;
+      if (cart && state.shopping) state.shopping.prepared[householdId] = true;
+      const qualityHistory = (acc.householdQualityUnits ??= {});
+      const categoryHistory = (acc.householdCategoryUnits ??= {});
+      const satisfactionHistory = (acc.householdBaseSatisfaction ??= {});
+      satisfactionHistory[householdId] ??= household.satisfactionScore;
+      let qualityUnits = qualityHistory[householdId] ?? 0;
       let unitsBought = 0;
-      const unitsByCategory: Partial<Record<ProductCategoryId, number>> = {};
+      const unitsByCategory: Partial<Record<ProductCategoryId, number>> = categoryHistory[householdId] ?? {};
       for (const purchase of decision.purchases) {
         const listing = state.retailListings.find((l) => l.id === purchase.listingId);
         const store = listing ? state.stores[listing.storeId] : undefined;
@@ -602,12 +599,14 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
         const cost = purchase.quantity * purchase.unitPrice;
         chargeDiscretionary(household.ledger, cost);
-        const distributionCost = purchase.quantity * COSTS.retailDistributionCostPerUnit;
-        credit(store.ledger, cost - distributionCost);
+        const goodsRevenue = purchase.quantity * listing.price;
+        const distributionCost = state.city ? 0 : purchase.quantity * COSTS.retailDistributionCostPerUnit;
+        credit(store.ledger, goodsRevenue - distributionCost);
+        recordTransport(state, store.id, household.id, purchase.quantity, "retail");
 
-        acc.retailRevenueByStore[store.id] = (acc.retailRevenueByStore[store.id] ?? 0) + cost;
+        acc.retailRevenueByStore[store.id] = (acc.retailRevenueByStore[store.id] ?? 0) + goodsRevenue;
         acc.retailVolume += purchase.quantity;
-        acc.retailValue += cost;
+        acc.retailValue += goodsRevenue;
         acc.storeUnitsSoldRetail[store.id] = (acc.storeUnitsSoldRetail[store.id] ?? 0) + purchase.quantity;
 
         listing.quantityAvailable -= purchase.quantity;
@@ -623,7 +622,10 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
       acc.householdUnitsBought[householdId] = (acc.householdUnitsBought[householdId] ?? 0) + unitsBought;
 
-      const rawSatisfaction = unitsBought > 0 ? qualityUnits / unitsBought : 0;
+      qualityHistory[householdId] = qualityUnits;
+      categoryHistory[householdId] = unitsByCategory;
+      const allUnits = acc.householdUnitsBought[householdId] ?? 0;
+      const rawSatisfaction = allUnits > 0 ? qualityUnits / allUnits : 0;
       let essentialPenalty = 0;
       const missedEssentialCategories: ProductCategoryId[] = [];
       const eligibleAtRoundStart = eligibleRetailListingsForHousehold(household, roundStartListings, state.stores);
@@ -636,7 +638,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         }
       }
       const roundSatisfaction = Math.max(0, rawSatisfaction - essentialPenalty);
-      household.satisfactionScore = household.satisfactionScore * 0.7 + roundSatisfaction * 0.3;
+      household.satisfactionScore = satisfactionHistory[householdId]! * 0.7 + roundSatisfaction * 0.3;
       acc.householdEssentialCategoriesMissed[householdId] = missedEssentialCategories;
     }
   }
@@ -733,6 +735,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
     const metrics: RoundMetrics = {
       round: state.currentRound,
+      ...(state.city ? { locationCosts: JSON.parse(JSON.stringify(state.city.costs)) as NonNullable<RoundMetrics["locationCosts"]> } : {}),
       companyProfit,
       storeProfit,
       companyMarketShare,
@@ -762,7 +765,12 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
     state.roundMetrics.push(metrics);
   }
 
-  return {
+  function accounted(state: GameState, action: () => void): void {
+    acc = state.roundAccounting ?? acc;
+    action();
+    state.roundAccounting = acc;
+  }
+  const handlers: PhaseHandlers = {
     "company-turn": runCompanyTurn,
     "wholesale-market-update": runWholesaleMarketUpdate,
     "store-turn": runStoreTurn,
@@ -777,6 +785,17 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
       ),
     "round-settlement": runRoundSettlement,
   };
+  for (const phase of Object.keys(handlers) as (keyof PhaseHandlers)[]) {
+    const handler = handlers[phase]!;
+    handlers[phase] = state => {
+      accounted(state, () => handler(state));
+      if (phase === "round-settlement") delete state.roundAccounting;
+    };
+  }
+  return Object.assign(handlers, {
+    checkoutStore: (state: GameState, id: ParticipantId, checkout: CartCheckout) => accounted(state, () => runStoreTurn(state, { id, checkout })),
+    checkoutHousehold: (state: GameState, id: ParticipantId, checkout: CartCheckout) => accounted(state, () => runConsumerPurchases(state, [id], checkout.lines)),
+  });
 }
 
 /**

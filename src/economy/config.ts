@@ -140,6 +140,24 @@ export const DISTRICTS: Record<DistrictId, DistrictProfile> = {
 
 export const DISTRICT_IDS: readonly DistrictId[] = Object.keys(DISTRICTS) as DistrictId[];
 
+/** City economy v1: provisional classroom tuning, shared by server and previews. */
+export const CITY_RULES = {
+  minBlockSize: 3,
+  roadCapacity: 24,
+  maxCongestion: 2,
+  wholesaleBaseFee: 0.25,
+  retailBaseFee: 0.15,
+  wholesalePerBlock: 0.08,
+  retailPerBlock: 0.04,
+  householdBaseRent: 8,
+  rentBaseFactor: 0.8,
+  rentAccessWeight: 0.3,
+  rentDensityWeight: 0.15,
+  rentCongestionDiscount: 0.08,
+  neighborhoodRadius: 2,
+  neighborhoodCapacity: 12,
+} as const;
+
 /**
  * 기업의 실효 생산단가. src/npc/decisions.ts(봇)와 src/economy/humanDecisions.ts(사람)가
  * 똑같이 이 함수를 쓴다 — UI도 미리보기를 보여줄 때 이 함수를 그대로 불러써야 하며,

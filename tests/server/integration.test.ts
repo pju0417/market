@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApiRequestListener } from "../../src/server/nodeAdapter.js";
+import type { GameState } from "../../src/types/domain.js";
 
 /**
  * `http.createServer(nodeAdapter(...)).listen(0)` + Node 전역 `fetch`로 실제 TCP를 거치는
@@ -92,6 +93,15 @@ describe("Milestone 4 2단계 integration: real TCP server, two virtual student 
 
     const stateBeforeAnySubmit = await getJson(`/api/sessions/${sessionId}/state`);
     const versionBefore = (stateBeforeAnySubmit.body as { version: number }).version;
+    const sharedState = (stateBeforeAnySubmit.body as { state: GameState }).state;
+    expect(sharedState.city).toBeDefined();
+    for (const player of sharedState.players) {
+      for (const id of [player.companyId, player.storeId, player.householdId]) {
+        expect(sharedState.city!.positions[id]).toHaveLength(2);
+      }
+    }
+    const secondClientView = await getJson(`/api/sessions/${sessionId}/state`);
+    expect((secondClientView.body as { state: GameState }).state.city).toEqual(sharedState.city);
 
     const submitA = await postJson(
       `/api/sessions/${sessionId}/submit/company`,

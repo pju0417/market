@@ -1,3 +1,5 @@
+import { PRODUCT_CATEGORIES } from "../economy/config.js";
+import type { CartCheckout, CartReceipt } from "../types/domain.js";
 /**
  * Milestone 2(Local Classroom Prototype) 세션. docs/MULTIPLAYER_DESIGN.md가 예약해 둔
  * "누가 제출했는지, 언제 phase를 넘기는지" 책임을 처음으로 구현한다 — 로컬(단일 기기,
@@ -68,6 +70,7 @@ export interface StepOutcome {
  * 담지 않는다"는 기존 원칙과 일관되게 별도 타입으로 관리한다.
  */
 export interface PendingSubmissionsSnapshot {
+  version?: number;
   companyInputs: Record<ParticipantId, CompanyDecisionInput>;
   storeRequests: Record<ParticipantId, StoreDecisionInput>;
   householdRequests: Record<ParticipantId, CategoryPurchaseRequest[]>;
@@ -224,6 +227,7 @@ export class GameSession {
     pending?: PendingSubmissionsSnapshot,
     timeoutSettings?: SubmissionTimeoutSettings,
   ): GameSession {
+    relocateSchoolTenants(savedState.city);
     return new GameSession(savedState.config.rngSeed, undefined, savedState, 1, pending, timeoutSettings);
   }
 
@@ -269,6 +273,17 @@ export class GameSession {
     const store = this.state.stores[player.storeId]!;
     store.districtId = choices.storeDistrictId;
     store.specialtyCategoryId = choices.storeCategoryId;
+    if (this.state.city) this.state.city = createCity(this.state);
+    this.notify();
+  }
+
+  /** New sessions opt into map costs; legacy saves retain their original economics. */
+  enableCityEconomy(): void {
+    if (this.state.city) return;
+    if (this.state.currentRound !== 1 || this.state.currentPhase !== "company-turn") {
+      throw new Error("City economy must be enabled before starting the game");
+    }
+    this.state.city = createCity(this.state);
     this.notify();
   }
 
@@ -306,6 +321,7 @@ export class GameSession {
    * `humanPlayerIds`가 그 부분집합이므로 자연히 다시 제외된 채로 복원된다.
    */
   private restorePendingSubmissions(pending: PendingSubmissionsSnapshot): void {
+    this.version = pending.version ?? 0;
     for (const [companyId, input] of Object.entries(pending.companyInputs)) {
       this.pendingCompanyInputs.set(companyId, input);
     }
@@ -340,6 +356,7 @@ export class GameSession {
    */
   exportPendingSubmissions(): PendingSubmissionsSnapshot {
     return {
+      version: this.version,
       companyInputs: Object.fromEntries(this.pendingCompanyInputs),
       storeRequests: Object.fromEntries(this.pendingStoreRequests),
       householdRequests: Object.fromEntries(this.pendingHouseholdRequests),
@@ -438,6 +455,41 @@ export class GameSession {
       default:
         return [];
     }
+  }
+
+  /** A receipt id makes retries safe even after a response is lost. Commit a cloned state only on success. */
+  checkoutCart(role: "store" | "household", participantId: ParticipantId, checkout: CartCheckout): CartReceipt {
+    if (!checkout || typeof checkout.requestId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(checkout.requestId) || !Number.isSafeInteger(checkout.round)) {
+      throw new Error("결제 요청을 확인해 주세요.");
+    }
+    const player = this.humanPlayers.find(p => (role === "store" ? p.storeId : p.householdId) === participantId);
+    if (!player) throw new Error("참가자 정보를 확인해 주세요.");
+    const receiptKey = `${participantId}:${checkout.requestId}`;
+    const existing = this.state.shopping?.receipts[receiptKey];
+    if (existing && existing.round === checkout.round) return existing;
+    this.assertPhase(role === "store" ? "store-turn" : "household-turn");
+    if (checkout.round !== this.state.currentRound) throw new Error("라운드가 변경되었어요. 화면을 새로 확인해 주세요.");
+    if (!this.getUnsubmittedParticipantIds().includes(participantId)) throw new Error("이미 턴을 종료했어요.");
+    if (checkout.retailPrice !== undefined && (!Number.isFinite(checkout.retailPrice) || checkout.retailPrice < 0)) throw new Error("판매 가격을 확인해 주세요.");
+    if (checkout.sellingCategoryId !== undefined && !PRODUCT_CATEGORIES.includes(checkout.sellingCategoryId)) throw new Error("판매 업종을 확인해 주세요.");
+    if (checkout.advertise !== undefined && typeof checkout.advertise !== "boolean") throw new Error("광고 설정을 확인해 주세요.");
+    const draft = JSON.parse(JSON.stringify(this.state)) as GameState;
+    draft.shopping ??= { round: draft.currentRound, prepared: {}, units: {}, receipts: {} };
+    const handlers = createPhaseHandlers(createRng(draft.config.rngSeed));
+    if (role === "store") handlers.checkoutStore(draft, participantId, checkout);
+    else handlers.checkoutHousehold(draft, participantId, checkout);
+    const receipt: CartReceipt = {
+      requestId: checkout.requestId, round: checkout.round, participantId,
+      total: checkout.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
+      units: checkout.lines.reduce((sum, line) => sum + line.quantity, 0),
+      remainingCash: (role === "store" ? draft.stores[participantId]! : draft.households[participantId]!).ledger.cash,
+    };
+    draft.shopping.units[participantId] = (draft.shopping.units[participantId] ?? 0) + receipt.units;
+    draft.shopping.receipts[receiptKey] = receipt;
+    Object.assign(this.state, draft);
+    this.notify();
+    void this.persist();
+    return receipt;
   }
 
   submitCompanyDecision(companyId: ParticipantId, input: CompanyDecisionInput): void {
@@ -593,3 +645,5 @@ export function phaseNeedsHumanInput(phase: RoundPhase): boolean {
 
 export type { AutoFillPreference, PriorityPurchasePick, StorePurchaseRequest } from "../economy/humanDecisions.js";
 export type { CategoryPurchaseRequest, CompanyDecisionInput, ParticipantId, StoreDecisionInput, SubmissionTimeoutSettings };
+import { createCity } from "../economy/city.js";
+import { relocateSchoolTenants } from '../economy/metropolisCity.js';

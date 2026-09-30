@@ -1,3 +1,4 @@
+import type { CartCheckout, CartReceipt } from "../../types/domain.js";
 /**
  * `src/appsScript/entry.ts`(Google Apps Script Web App)를 감싸는 `SessionClient`의 자매
  * 클라이언트 (Milestone 5 3부, D-032). Apps Script Web App은 모든 요청이 같은 `.../exec`
@@ -90,6 +91,10 @@ export class AppsScriptSessionClient {
   getState(sessionId: string, since?: number): Promise<PollResult> {
     const query = since !== undefined ? { since: String(since) } : {};
     return this.getRequest<PollResult>(`/api/sessions/${sessionId}/state`, query);
+  }
+
+  checkoutCart(sessionId: string, token: string, role: "store" | "household", id: string, cart: CartCheckout): Promise<CartReceipt> {
+    return this.postRequest(`/api/sessions/${sessionId}/submit/${role}`, token, { [role + "Id"]: id, cart });
   }
 
   submitCompany(

@@ -33,6 +33,8 @@ export interface DispatchDeps {
   lock: LockLike;
   uuidGen: UuidGenerator;
   lockTimeoutMs?: number;
+  /** Commit buffered Sheets writes before releasing the cross-request lock. */
+  flush?: () => void;
   /** `src/server/httpApi.ts`의 `handleApiRequest`(또는 그와 같은 시그니처의 대체 구현). */
   handleApiRequest: HandleApiRequestFn;
 }
@@ -58,6 +60,7 @@ export async function dispatchApiRequest(deps: DispatchDeps, request: ApiRequest
     configureSessionRegistryAdapter(deps.gateway, deps.uuidGen);
     const response = await deps.handleApiRequest(request);
     flushSessionRegistryAdapter();
+    deps.flush?.();
     return response;
   } catch (error) {
     return internalErrorResponse(error);

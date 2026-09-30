@@ -103,6 +103,7 @@ function buildDispatchDeps(): DispatchDeps {
   return {
     gateway: realGateway,
     lock: LockService.getScriptLock(),
+    flush: () => SpreadsheetApp.flush(),
     uuidGen: () => Utilities.getUuid(),
     handleApiRequest,
   };

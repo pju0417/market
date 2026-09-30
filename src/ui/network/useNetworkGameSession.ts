@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { SessionClient, StateResult } from "./sessionClient.js";
 import { translateNetworkError } from "./errorMessages.js";
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 5_000;
 
 export function useNetworkGameSession(
   client: SessionClient,
@@ -19,18 +19,23 @@ export function useNetworkGameSession(
   useEffect(() => {
     let cancelled = false;
     let sinceVersion: number | undefined;
+    let inFlight = false;
 
     async function poll(): Promise<void> {
+      if (inFlight || cancelled) return;
+      inFlight = true;
       try {
         const result = await client.getState(sessionId, sinceVersion);
         if (cancelled) return;
-        if (!("unchanged" in result)) {
+        if (!("unchanged" in result) && (sinceVersion === undefined || result.version >= sinceVersion)) {
           sinceVersion = result.version;
           setStateResult(result);
         }
         setError(undefined);
       } catch (err) {
         if (!cancelled) setError(translateNetworkError(err));
+      } finally {
+        inFlight = false;
       }
     }
 

@@ -88,6 +88,7 @@ export function createSession(
     undefined,
     timeoutSettings ?? DEFAULT_SERVER_SUBMISSION_TIMEOUT_SETTINGS,
   );
+  session.enableCityEconomy();
   const entry: SessionEntry = {
     session,
     tokens: new TokenStore(),

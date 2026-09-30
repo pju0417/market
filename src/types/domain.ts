@@ -132,6 +132,9 @@ export interface HouseholdState {
 
 /** 도매시장에 등록된 상품 한 건. 자기 거래 금지(D-005)는 매칭 로직에서 강제한다. */
 export interface WholesaleListing {
+  /** Buyer-specific UI/decision quote only; authoritative market price excludes transport. */
+  transportCostPerUnit?: number;
+  goodsPrice?: number;
   id: string;
   companyId: ParticipantId;
   categoryId: ProductCategoryId;
@@ -142,6 +145,8 @@ export interface WholesaleListing {
 
 /** 가게가 등록한 소매 상품 한 건. 자기 거래 금지(D-006)는 매칭 로직에서 강제한다. */
 export interface RetailListing {
+  transportCostPerUnit?: number;
+  goodsPrice?: number;
   id: string;
   storeId: ParticipantId;
   categoryId: ProductCategoryId;
@@ -164,6 +169,7 @@ export interface CategoryClearingSummary {
 
 /** 라운드별 시장/경영 지표 스냅샷. economy-reviewer 검토와 validate:economy가 사용한다. */
 export interface RoundMetrics {
+  locationCosts?: Record<ParticipantId, { rent: number; transport: number }>;
   round: number;
   companyProfit: Record<ParticipantId, number>;
   storeProfit: Record<ParticipantId, number>;
@@ -231,6 +237,11 @@ export interface GameConfig {
 }
 
 export interface GameState {
+  /** Persist in-flight accounting across stateless Apps Script requests. */
+  roundAccounting?: RoundAccumulator;
+  shopping?: ShoppingProgress;
+  /** Absent on legacy saves; new city games share these coordinates and traffic snapshots. */
+  city?: CityState;
   config: GameConfig;
   currentRound: number;
   currentPhase: RoundPhase;
@@ -242,4 +253,65 @@ export interface GameState {
   wholesaleListings: WholesaleListing[];
   retailListings: RetailListing[];
   roundMetrics: RoundMetrics[];
+}
+
+export type CityPoint = [number, number];
+export interface CityState {
+  metropolisLayout?: true;
+  addresses?: Record<ParticipantId, { building: number; unit: number }>;
+  artworkLayout?: true;
+  zoneDistricts?: DistrictId[];
+  version: 1;
+  blockSize: number;
+  positions: Record<ParticipantId, CityPoint>;
+  trafficRound: number;
+  /** Last round's road usage; fixed throughout this round for consistent quotes. */
+  traffic: Record<string, number>;
+  roadLoads: Record<string, number>;
+  costs: Record<ParticipantId, { rent: number; transport: number }>;
+}
+
+export interface RoundAccumulator {
+  householdQualityUnits?: Record<ParticipantId, number>;
+  householdCategoryUnits?: Record<ParticipantId, Partial<Record<ProductCategoryId, number>>>;
+  householdBaseSatisfaction?: Record<ParticipantId, number>;
+  cashSnapshotCompany: Record<ParticipantId, number>;
+  cashSnapshotStore: Record<ParticipantId, number>;
+  wholesaleRevenueByCompany: Record<ParticipantId, number>;
+  retailRevenueByStore: Record<ParticipantId, number>;
+  wholesaleVolume: number;
+  wholesaleValue: number;
+  retailVolume: number;
+  retailValue: number;
+  /** advisor(전략 비서)용 계측치. 시장 지표 계산 자체에는 쓰이지 않는다 (docs/DECISIONS.md 참고: 새 필드 추가만, 기존 계산 순서는 불변). */
+  companyUnitsProduced: Record<ParticipantId, number>;
+  companyUnitsSoldWholesale: Record<ParticipantId, number>;
+  storeUnitsPurchased: Record<ParticipantId, number>;
+  storeWholesaleSpend: Record<ParticipantId, number>;
+  storeUnitsSoldRetail: Record<ParticipantId, number>;
+  /** 가게별 × 공급 기업별 이번 라운드 매입 지출 (storeSupplierCount/storeTopSupplierSpendShare 계산용). */
+  storeSpendByCompany: Record<ParticipantId, Record<ParticipantId, number>>;
+  householdSpend: Record<ParticipantId, number>;
+  householdUnitsBought: Record<ParticipantId, number>;
+  /** 가계별 × 카테고리별 이번 라운드 지출 (householdCategoryCount/householdTopCategorySpendShare 계산용). */
+  householdSpendByCategory: Record<ParticipantId, Partial<Record<ProductCategoryId, number>>>;
+  householdEssentialCategoriesMissed: Record<ParticipantId, ProductCategoryId[]>;
+  /** D-026: 이번 라운드 가계 소비 처리(household-turn/npc-consumer-behavior 공용) 시작 시점의
+   *  state.retailListings 스냅샷. null이면 아직 이번 라운드에 계산 안 함 — runConsumerPurchases가
+   *  라운드 내 처음 호출될 때 그 자리에서 한 번만 채운다. */
+  roundStartRetailListings: RetailListing[] | null;
+  /** 구매 매칭 알고리즘 재설계 Stage 1: runStoreTurn 시작 시점의 state.wholesaleListings
+   *  스냅샷. roundStartRetailListings와 대칭 — wholesaleCategoryClearing 계산에 쓰인다. */
+  roundStartWholesaleListings: WholesaleListing[] | null;
+}
+
+
+export interface CartLine { listingId: string; quantity: number; unitPrice: number }
+export interface CartCheckout { requestId: string; round: number; lines: CartLine[]; retailPrice?: number; sellingCategoryId?: ProductCategoryId; advertise?: boolean }
+export interface CartReceipt { requestId: string; round: number; participantId: ParticipantId; total: number; units: number; remainingCash: number }
+export interface ShoppingProgress {
+  round: number;
+  prepared: Record<ParticipantId, boolean>;
+  units: Record<ParticipantId, number>;
+  receipts: Record<string, CartReceipt>;
 }

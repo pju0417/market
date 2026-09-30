@@ -1,3 +1,4 @@
+import type { CartCheckout } from "../types/domain.js";
 /**
  * 순수 HTTP 요청 처리 함수 (Milestone 4 2단계). Node의 raw request/response에 의존하지
  * 않는다 — 나중에 이 저장소가 Google Apps Script Web App(`doPost`/`doGet`)으로 포팅될 때
@@ -447,6 +448,13 @@ async function handleSubmit(
   if (!isRecord(body)) return badRequest("invalid request body");
 
   try {
+    if (body.cart !== undefined && role !== "company") {
+      const id = role === "store" ? body.storeId : body.householdId;
+      if (id !== (role === "store" ? player.storeId : player.householdId)) return forbidden("participant does not belong to the authenticated player");
+      if (!isRecord(body.cart)) return badRequest("invalid cart");
+      const receipt = entry.session.checkoutCart(role, id as string, body.cart as unknown as CartCheckout);
+      return { status: 200, body: receipt };
+    }
     if (role === "company") {
       const companyId = body.companyId;
       if (typeof companyId !== "string" || companyId !== player.companyId) {

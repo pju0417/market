@@ -170,11 +170,21 @@ body {
   animation: card-in 0.4s ease both;
 }
 
-.title-mascots {
-  font-size: 64px;
-  line-height: 1.1;
-  letter-spacing: 6px;
-  margin: 8px 0;
+.village-artwork {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+  margin: 0 0 var(--space-3);
+  box-shadow: var(--shadow-card);
+}
+
+.role-artwork {
+  width: 80px;
+  height: 80px;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
 }
 
 .title-tagline {
@@ -255,8 +265,9 @@ button.mode-card:active {
     flex-basis: 100%;
   }
 
-  .title-mascots {
-    font-size: 48px;
+  .role-artwork {
+    width: 64px;
+    height: 64px;
   }
 }
 

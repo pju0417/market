@@ -43,6 +43,9 @@ export function serializeLiveState(state: GameState): string {
     retailListings,
   } = state;
   const liveState: LiveGameState = {
+    ...(state.roundAccounting ? { roundAccounting: state.roundAccounting } : {}),
+    ...(state.shopping ? { shopping: state.shopping } : {}),
+    ...(state.city ? { city: state.city } : {}),
     config,
     currentRound,
     currentPhase,
@@ -53,7 +56,23 @@ export function serializeLiveState(state: GameState): string {
     wholesaleListings,
     retailListings,
   };
-  return JSON.stringify(liveState);
+  const json = JSON.stringify(liveState);
+  if (json.length < 45000) return json;
+  // Repeated field names dominate classroom snapshots. Lossless key packing keeps
+  // the live state within a Sheets cell without rounding monetary values.
+  const keys: string[] = [];
+  const indices = new Map<string, string>();
+  function pack(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(pack);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      let index = indices.get(key);
+      if (index === undefined) { index = keys.length.toString(36); keys.push(key); indices.set(key, index); }
+      return [index, pack(item)];
+    }));
+  }
+  const data = pack(liveState);
+  return JSON.stringify({ packedKeysV1: keys, data });
 }
 
 /**
@@ -61,7 +80,13 @@ export function serializeLiveState(state: GameState): string {
  * `roundMetrics` 배열을 다시 합쳐 완전한 `GameState`를 재구성한다.
  */
 export function deserializeLiveState(json: string, roundMetrics: RoundMetrics[]): GameState {
-  const liveState = JSON.parse(json) as LiveGameState;
+  const parsed = JSON.parse(json) as LiveGameState & { packedKeysV1?: string[]; data?: unknown };
+  function unpack(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(unpack);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [parsed.packedKeysV1![parseInt(key, 36)]!, unpack(item)]));
+  }
+  const liveState = parsed.packedKeysV1 ? unpack(parsed.data) as LiveGameState : parsed;
   return { ...liveState, roundMetrics };
 }
 

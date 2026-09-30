@@ -4,7 +4,8 @@
  * 파일로 옮겼다 — src/ui/turnCalculations.ts는 이 파일의 함수들을 그대로 re-export한다.
  */
 import { COSTS, DISTRICTS } from "./config.js";
-import type { DistrictId } from "../types/domain.js";
+import type { DistrictId, GameState } from "../types/domain.js";
+import { cityRent } from "./city.js";
 
 /** 지정한 상권의 고정비(인건비+임대료)를 계산한다. 기업/가게 공통 패턴, 기준값만 다르다. */
 function computeFixedCost(districtId: DistrictId, baseLaborCost: number, baseRentCost: number): number {
@@ -12,11 +13,13 @@ function computeFixedCost(districtId: DistrictId, baseLaborCost: number, baseRen
   return baseLaborCost + baseRentCost * district.rentMultiplier;
 }
 
-export function computeCompanyFixedCost(districtId: DistrictId): number {
+export function computeCompanyFixedCost(districtId: DistrictId, state?: GameState, id?: string): number {
+  if (state?.city && id) return COSTS.baseLaborCostCompany + cityRent(state, id, "company", districtId).total;
   return computeFixedCost(districtId, COSTS.baseLaborCostCompany, COSTS.baseRentCompany);
 }
 
-export function computeStoreFixedCost(districtId: DistrictId): number {
+export function computeStoreFixedCost(districtId: DistrictId, state?: GameState, id?: string): number {
+  if (state?.city && id) return COSTS.baseLaborCostStore + cityRent(state, id, "store", districtId).total;
   return computeFixedCost(districtId, COSTS.baseLaborCostStore, COSTS.baseRentStore);
 }
 
