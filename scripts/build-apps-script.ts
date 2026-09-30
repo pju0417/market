@@ -14,6 +14,8 @@
 import { build, type Plugin } from "esbuild";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
+import { compileAppsScriptSync } from "./apps-script-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -31,6 +33,14 @@ const outfile = path.join(projectRoot, "dist/apps-script/Code.gs.js");
 const aliasSessionRegistryPlugin: Plugin = {
   name: "alias-session-registry-to-apps-script-adapter",
   setup(pluginBuild) {
+    const syncFiles = new Set([
+      "src/appsScript/entry.ts", "src/appsScript/dispatch.ts", "src/server/httpApi.ts",
+      "src/multiplayer/GameSession.ts", "src/engine/RoundEngine.ts",
+    ].map((file) => path.join(projectRoot, file)));
+    pluginBuild.onLoad({ filter: /\.ts$/ }, async (args) => {
+      if (!syncFiles.has(args.path)) return undefined;
+      return { contents: compileAppsScriptSync(await readFile(args.path, "utf8"), args.path), loader: "js" };
+    });
     pluginBuild.onResolve({ filter: /^\.\/sessionRegistry\.js$/ }, (args) => {
       if (path.resolve(args.resolveDir, args.path.replace(/\.js$/, ".ts")) !== sessionRegistryPath) {
         return undefined;

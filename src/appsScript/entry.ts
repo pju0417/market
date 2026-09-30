@@ -9,10 +9,9 @@
  * 하이드레이트-플러시)은 전부 `requestAdapter.ts`/`dispatch.ts`/`sessionRegistryAdapter.ts`
  * (모두 vitest로 검증됨)에 위임한다.
  *
- * 미검증 리스크 하나를 명시적으로 기록한다(D-032): Apps Script의 `doGet`/`doPost`가 `async`
- * 함수가 반환하는 Promise를 실제로 기다려주는지는 문서/커뮤니티 사례가 엇갈려 코드로 확인할
- * 방법이 없다. v1은 "지원된다"고 가정하고 진행하며, 실제 배포 시 가장 먼저 확인해야 할
- * 항목이다.
+ * Apps Script는 Promise를 웹 응답으로 반환할 수 없다. 배포 빌드는 검증된 동기
+ * 서비스 호출 경로를 scripts/apps-script-sync.ts로 변환한다. Node/브라우저 빌드는
+ * 기존 비동기 동작을 유지한다. 번들 실행 테스트가 동기 TextOutput 및 저장을 검증한다.
  *
  * Apps Script Web App은 `ContentService`로 만든 응답의 실제 HTTP 상태 코드를 커스터마이즈할
  * 방법이 없다(항상 200으로 내려간다) — 그래서 의도한 상태 코드(`ApiResponse.status`)를 JSON
