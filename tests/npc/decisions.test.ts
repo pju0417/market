@@ -190,8 +190,9 @@ describe("decideCompanyProduction", () => {
       const base = decideCompanyProduction(company, cash, createRng(1), 1);
       const scaled = decideCompanyProduction(company, cash, createRng(1), 1.3);
 
-      expect(base!.quantity).toBe(10);
-      expect(scaled!.quantity).toBe(Math.floor(cash / (unitCost * 1.3)));
+      expect(base!.quantity).toBe(Math.floor(cash / base!.unitCost));
+      expect(scaled!.unitCost).toBeCloseTo(base!.unitCost * 1.3);
+      expect(scaled!.quantity).toBe(Math.floor(cash / scaled!.unitCost));
       expect(scaled!.quantity).toBeLessThan(base!.quantity);
     });
 

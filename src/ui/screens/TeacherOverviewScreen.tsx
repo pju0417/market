@@ -66,7 +66,7 @@ export function TeacherOverviewScreen({ state, onClose }: Props) {
         </button>
       </div>
 
-      <RankingTable title="기업 순위" rows={companyRanking} />
+      <RankingTable title="공장 순위" rows={companyRanking} />
       <RankingTable title="가게 순위" rows={storeRanking} />
 
       <div className="card">
@@ -82,7 +82,7 @@ export function TeacherOverviewScreen({ state, onClose }: Props) {
                 <th>도매 거래액</th>
                 <th>소매 거래량</th>
                 <th>소매 거래액</th>
-                <th>평균 가계 만족도</th>
+                <th>평균 가정 만족도</th>
               </tr>
             </thead>
             <tbody>

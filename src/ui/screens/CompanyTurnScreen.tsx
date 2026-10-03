@@ -1,3 +1,4 @@
+import { BeginnerGuide } from "./BeginnerGuide.js";
 import { useMemo, useState } from "react";
 import { RoleArtwork } from "../GameArtwork.js";
 import { analyzeCompanyTurn } from "../../advisor/companyAdvisor.js";
@@ -24,6 +25,7 @@ import { AdvisorPanel } from "./AdvisorPanel.js";
 import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
 import { TrendEventBanner } from "./TrendEventBanner.js";
+import { InventoryPanel } from "./InventoryPanel.js";
 
 interface Props {
   session: DecisionSubmitter;
@@ -35,7 +37,7 @@ interface Props {
   disabled?: boolean;
 }
 
-/** 기업 턴: 생산량, 품질, 도매 판매가격을 정한다 (docs/GAME_RULES.md 1절). */
+/** 공장 턴: 생산량, 품질, 도매 판매가격을 정한다 (docs/GAME_RULES.md 1절). */
 export function CompanyTurnScreen({ session, state, version, company, onSubmitted, disabled = false }: Props) {
   const fixedCost = computeCompanyFixedCost(company.districtId, state, company.id);
   const availableCash = computeAvailableCash(company.ledger.cash, fixedCost);
@@ -73,7 +75,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
     ? marketEventCostMultiplierFor(effectiveProductCategoryId, marketEvent)
     : 1;
   const unitCost = effectiveProductCategoryId
-    ? companyUnitCost(effectiveProductCategoryId, company.districtId) * costMultiplier
+    ? companyUnitCost(effectiveProductCategoryId, company.districtId, quality) * costMultiplier
     : 0;
   const cashAfterSwitch = Math.max(0, availableCash - switchCost);
 
@@ -99,12 +101,13 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
     <TrendEventBanner state={state} role="company" />
     <div className="card card-role-company">
       <h2 className="card-title">
-        <RoleArtwork role="company" /> 기업 활동 ① 생산
+        <RoleArtwork role="company" /> 공장 운영 · 생산
       </h2>
 
 
+      <BeginnerGuide topic="company" />
       <label className="field">
-        <span className="field-label">생산량 (최대 {maxAffordable}개까지 살 수 있어요)</span>
+        <span className="field-label">생산량 (최대 {maxAffordable}개까지 만들 수 있어요)</span>
         <input
           type="number"
           min={0}
@@ -121,12 +124,13 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
       </label>
 
       <label className="field">
-        <span className="field-label">품질 목표: {(quality * 100).toFixed(0)}점 (높을수록 생산비/가격에 영향)</span>
+        <span className="field-label">품질 목표: {(quality * 100).toFixed(0)}점 · 생산 단가 {unitCost.toFixed(2)}원/개</span>
         <input type="range" min={0} max={1} step={0.05} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
+        <span className="hint">품질을 높이면 생산비도 올라가요. 50점이 기준이며, 0점은 25% 저렴하고 100점은 25% 비싸요. 판매 가격은 직접 정해요.</span>
       </label>
 
       <label className="field">
-        <span className="field-label">도매 판매가격 (개당)</span>
+        <span className="field-label">가게에 판매할 가격 · 개당 (도매)</span>
         <input
           type="number"
           min={0}
@@ -144,6 +148,7 @@ export function CompanyTurnScreen({ session, state, version, company, onSubmitte
         <p style={{ color: "#dc2626", fontSize: 14 }}>생산량을 줄여야 해요 — 가진 돈보다 많이 쓸 수 없어요.</p>
       )}
 
+      <InventoryPanel company={company} round={state.currentRound} />
       <details className="decision-details"><summary>자금·재고·비용 자세히 보기</summary>
       <div className="hud-chips">
         <span className="hud-chip">

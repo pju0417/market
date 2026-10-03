@@ -20,9 +20,9 @@ export function IncomeEventBanner({ state, role }: Props) {
   const round = state.currentRound;
   const message =
     role === "household"
-      ? `시장 소식: 이번 ${round}라운드는 경기가 어려워져 가계 용돈이 평소보다 적어요(약 ${BUDGET_DECREASE_PERCENT}% 감소). 이 라운드에만 적용됩니다.`
+      ? `시장 소식: 이번 ${round}라운드는 경기가 어려워져 가정 용돈이 평소보다 적어요(약 ${BUDGET_DECREASE_PERCENT}% 감소). 이 라운드에만 적용됩니다.`
       : role === "store"
-        ? `시장 소식: 이번 ${round}라운드는 경기가 어려워져 가계의 씀씀이가 줄어들 수 있어요. 소비자들이 평소보다 적게 살 수 있습니다.`
+        ? `시장 소식: 이번 ${round}라운드는 경기가 어려워져 가정의 씀씀이가 줄어들 수 있어요. 소비자들이 평소보다 적게 살 수 있습니다.`
         : `시장 소식: 이번 ${round}라운드는 경기가 어려워져 소비자 구매력이 줄어들 수 있어요. 도매 판매에 영향이 있을 수 있습니다.`;
 
   return (

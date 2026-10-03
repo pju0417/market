@@ -20,6 +20,7 @@ import { cityRent, deliveredListings, recordTransport } from "../economy/city.js
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore, blendQuality } from "../economy/market.js";
 import { getActiveMarketEvent, marketEventCostMultiplierFor } from "../economy/marketEvents.js";
 import { getActiveTrendEvent } from "../economy/trendEvent.js";
+import { blendedInventoryCost } from "../economy/inventoryCost.js";
 import { computeCategoryClearingSummary } from "../economy/marketStats.js";
 import { createRng, rngPick, shuffle, type Rng } from "../economy/rng.js";
 import { applyFixedCosts, chargeCapped, chargeDiscretionary, credit } from "../economy/settlement.js";
@@ -399,6 +400,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
 
       acc.companyUnitsProduced[company.id] = (acc.companyUnitsProduced[company.id] ?? 0) + decision.quantity;
       chargeDiscretionary(company.ledger, decision.productionCost);
+      company.inventoryUnitCost = blendedInventoryCost(company.inventoryQuantity, company.inventoryUnitCost, decision.quantity, decision.productionCost);
       company.quality = blendQuality(company.inventoryQuantity, company.quality, decision.quantity, decision.quality);
       company.inventoryQuantity += decision.quantity;
       company.lastWholesalePrice = decision.wholesalePrice;
@@ -501,6 +503,7 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         const spendByCompany = (acc.storeSpendByCompany[store.id] ??= {});
         spendByCompany[company.id] = (spendByCompany[company.id] ?? 0) + cost;
 
+        store.inventoryUnitCost = blendedInventoryCost(store.inventoryQuantity, store.inventoryUnitCost, purchase.quantity, cost);
         store.inventoryQuality = blendQuality(store.inventoryQuantity, store.inventoryQuality, purchase.quantity, listing.quality);
         store.inventoryQuantity += purchase.quantity;
         listing.quantityAvailable -= purchase.quantity;
@@ -612,6 +615,10 @@ export function createPhaseHandlers(rng: Rng, decisionSource?: HumanDecisionSour
         listing.quantityAvailable -= purchase.quantity;
         store.inventoryQuantity -= purchase.quantity;
         qualityUnits += listing.quality * purchase.quantity;
+        if (household.kind === "student") {
+          household.purchases = (household.purchases ?? []).filter(p => p.round === state.currentRound);
+          household.purchases.push({ round: state.currentRound, categoryId: listing.categoryId, quantity: purchase.quantity, unitCost: purchase.unitPrice, quality: listing.quality });
+        }
         unitsBought += purchase.quantity;
 
         acc.householdSpend[householdId] = (acc.householdSpend[householdId] ?? 0) + cost;

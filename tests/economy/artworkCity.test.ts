@@ -20,6 +20,7 @@ describe('painted map geometry',()=>{
     const state=buildInitialGameState(count,42);state.city=createCity(state);
     await new RoundEngine(state,createAutoPlayPhaseHandlers(createRng(43))).runGame();
     expect(state.roundMetrics).toHaveLength(7);for(const a of cityActors(state)){expect(Number.isFinite(a.ledger.cash)).toBe(true);expect(a.ledger.cash).toBeGreaterThanOrEqual(0);}
-    const json=serializeLiveState(state);expect(json.length).toBeLessThan(50000);expect(deserializeLiveState(json,state.roundMetrics)).toEqual(state);
+    // Sheets cell limits are enforced by writeLiveSnapshot chunking (gasSessionStore.test.ts).
+    const json=serializeLiveState(state);expect(deserializeLiveState(json,state.roundMetrics)).toEqual(state);
   },60000);
 });

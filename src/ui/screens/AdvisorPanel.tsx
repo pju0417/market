@@ -1,6 +1,8 @@
 import type { TurnAdvice } from "../../advisor/types.js";
 import { ADVICE_DATA_AVAILABILITY_NOTES } from "../labels.js";
 
+const roleText = (text: string) => text.replaceAll("기업", "공장").replaceAll("가계", "가정");
+
 interface Props {
   advice: TurnAdvice;
 }
@@ -15,7 +17,7 @@ export function AdvisorPanel({ advice }: Props) {
       <h3>지금 상황</h3>
       <ul>
         {advice.situationSummary.map((line, index) => (
-          <li key={index}>{line}</li>
+          <li key={index}>{roleText(line)}</li>
         ))}
       </ul>
 
@@ -25,8 +27,8 @@ export function AdvisorPanel({ advice }: Props) {
       ) : (
         advice.causeHypotheses.map((cause) => (
           <div className="advisor-cause" key={cause.id}>
-            <p className="advisor-cause-description">{cause.description}</p>
-            <p className="advisor-cause-evidence">근거: {cause.evidence}</p>
+            <p className="advisor-cause-description">{roleText(cause.description)}</p>
+            <p className="advisor-cause-evidence">근거: {roleText(cause.evidence)}</p>
           </div>
         ))
       )}
@@ -35,13 +37,13 @@ export function AdvisorPanel({ advice }: Props) {
       <div className="advisor-options">
         {advice.options.map((option) => (
           <div className="advisor-option" key={option.id}>
-            <p className="advisor-option-title">{option.title}</p>
+            <p className="advisor-option-title">{roleText(option.title)}</p>
             <div className="advisor-option-columns">
               <div>
                 <p className="advisor-option-column-label">장점</p>
                 <ul>
                   {option.pros.map((pro, index) => (
-                    <li key={index}>{pro}</li>
+                    <li key={index}>{roleText(pro)}</li>
                   ))}
                 </ul>
               </div>
@@ -49,7 +51,7 @@ export function AdvisorPanel({ advice }: Props) {
                 <p className="advisor-option-column-label">위험</p>
                 <ul>
                   {option.risks.map((risk, index) => (
-                    <li key={index}>{risk}</li>
+                    <li key={index}>{roleText(risk)}</li>
                   ))}
                 </ul>
               </div>

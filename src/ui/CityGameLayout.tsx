@@ -10,11 +10,11 @@ import "./CityGameLayout.css";
 export const cityMapArtwork = new URL("./assets/city-map-v1.png", import.meta.url).href;
 
 const ROLES: readonly Role[] = ["company", "store", "household"];
-const NAMES: Record<Role, string> = { company: "내 생산 기업", store: "내 판매 기업·가게", household: "내 집" };
+const NAMES: Record<Role, string> = { company: "공장 운영", store: "가게 운영", household: "내 가정" };
 const TASKS: Record<Role, string> = { company: "생산 계획 세우기", store: "상품 들여와 판매하기", household: "필요한 물건 고르기" };
 const GUIDES: Record<Role, string> = {
-  company: "지도에서 내 기업을 눌러 생산량과 가격을 정해요.",
-  store: "지도에서 내 가게를 눌러 다른 기업의 상품을 비교해요.",
+  company: "지도에서 내 공장을 눌러 생산량과 가격을 정해요.",
+  store: "지도에서 내 가게를 눌러 다른 공장의 상품을 비교해요.",
   household: "지도에서 내 집을 눌러 예산에 맞게 장을 봐요.",
 };
 type Selection = Role | "market" | "results" | "neighbor" | null;
@@ -83,9 +83,11 @@ export function CityGameLayout({ state, player, children, teacherControl }: Prop
       <header className="city-topbar">
         <div className="city-brand"><span aria-hidden="true">◈</span><div><small>우리 손으로 움직이는</small><strong>경제 마을</strong></div></div>
         <div className="city-wallets">
-          {ROLES.map((role) => <button key={role} className={`city-wallet ${role}`} onClick={() => open(role)} aria-label={`${NAMES[role]} 자금 ${formatWon(wallet[role])}, 건물 보기`}>
-            <RoleArtwork role={role} /><span>{role === "household" ? "가계 저축" : `${NAMES[role]} 자금`}</span><strong>{formatWon(wallet[role])}</strong>
+          {([{ name: "내 기업", roles: ["company", "store"] }, { name: "내 가정 · 가계", roles: ["household"] }] as {name: string; roles: Role[]}[]).map(group => <section className="city-wallet-group" aria-label={group.name} key={group.name}><strong className="economic-group-label">{group.name}</strong><div>
+          {group.roles.map((role) => <button key={role} className={`city-wallet ${role}`} onClick={() => open(role)} aria-label={`${NAMES[role]} 자금 ${formatWon(wallet[role])}, 건물 보기`}>
+            <RoleArtwork role={role} /><span>{role === "household" ? "가정 저축" : `${NAMES[role]} 자금`}</span><strong>{formatWon(wallet[role])}</strong>
           </button>)}
+          </div></section>)}
         </div>
         <div className="city-round"><small>라운드</small><strong>{Math.min(state.currentRound, state.config.totalRounds)} <span>/ {state.config.totalRounds}</span></strong></div>
         {teacherControl && <div className="city-teacher">{teacherControl}</div>}
@@ -149,13 +151,13 @@ export function CityGameLayout({ state, player, children, teacherControl }: Prop
                 <button aria-pressed={market === "wholesale"} onClick={() => setMarket("wholesale")}>도매시장</button>
                 <button aria-pressed={market === "retail"} onClick={() => setMarket("retail")}>소매시장</button>
               </div>
-              <p className="city-market-note">{market === "wholesale" ? "기업이 만들고, 가게가 사요." : "가게가 팔고, 가계가 사요."} 상품 가격(운송비 제외)이며 내 매물도 포함돼요. 구매 화면에서는 내 위치까지의 운송비를 더해요.</p>
+              <p className="city-market-note">{market === "wholesale" ? "공장이 만들고, 가게가 사요." : "가게가 팔고, 가정이 사요."} 상품 가격(운송비 제외)이며 내 매물도 포함돼요. 구매 화면에서는 내 위치까지의 운송비를 더해요.</p>
               {Object.entries(CATEGORY_LABELS).map(([category, name]) => {
                 const listings = availableProducts.filter((item) => item.categoryId === category);
                 const quantity = listings.reduce((sum, item) => sum + item.quantityAvailable, 0);
                 return <div className="city-product" key={category}><span className={`city-product-symbol ${category}`} aria-hidden="true">{category === "food" ? "●" : category === "apparel" ? "◆" : category === "electronics" ? "▣" : "★"}</span><div><strong>{name}</strong><small>{listings.length ? `${formatWon(Math.min(...listings.map((item) => item.price)))}부터 · 매물 ${listings.length}건` : "현재 매물 없음"}</small></div><b>{Math.floor(quantity)}<small>개</small></b></div>;
               })}
-              <p className="city-market-note">거래는 현재 차례의 경영 패널에서 결정해요. 내 기업·가게와 직접 거래할 수는 없어요.</p>
+              <p className="city-market-note">거래는 현재 차례의 경영 패널에서 결정해요. 내 공장·가게와 직접 거래할 수는 없어요.</p>
               {activeRole && <button className="primary" onClick={() => open(activeRole)}>{TASKS[activeRole]} ↗</button>}
             </div>}
           </div>
@@ -164,11 +166,13 @@ export function CityGameLayout({ state, player, children, teacherControl }: Prop
 
       <footer className="city-dock">
         <nav className="city-role-nav" aria-label="경제 활동 순서">
-          {ROLES.map((role, index) => <button key={role} className={activeRole === role ? "is-current" : ""} aria-current={activeRole === role ? "step" : undefined} onClick={() => open(role)}>
-            <span className={`city-step ${role}`}>{index + 1}</span><span><strong>{NAMES[role]}</strong><small>{role === "company" ? "생산" : role === "store" ? "판매" : "소비"}</small></span>{activeRole === role && <span className="city-current-dot" aria-label="현재 차례" />}
+          {([{ name: "내 기업", roles: ["company", "store"] }, { name: "내 가정 · 가계", roles: ["household"] }] as {name: string; roles: Role[]}[]).map(group => <div className="city-role-group" role="group" aria-label={group.name} key={group.name}><strong className="economic-group-label">{group.name}</strong><div>
+          {group.roles.map((role) => <button key={role} className={activeRole === role ? "is-current" : ""} aria-current={activeRole === role ? "step" : undefined} onClick={() => open(role)}>
+            <span className={`city-step ${role}`}>{ROLES.indexOf(role) + 1}</span><span><strong>{NAMES[role]}</strong><small>{role === "company" ? "가게에 판매(도매)" : role === "store" ? "소비자에게 판매(소매)" : "구매·소비"}</small></span>{activeRole === role && <span className="city-current-dot" aria-label="현재 차례" />}
           </button>)}
+          </div></div>)}
         </nav>
-        <div className="city-economic-pulse"><span className="city-pulse-icon" aria-hidden="true">▥</span><div><small>{latest ? `${latest.round}라운드 거래 기록` : "우리 마을 참여 현황"}</small><strong>{latest ? `도매 ${Math.round(latest.totalWholesaleVolume)}개 · 소매 ${Math.round(latest.totalRetailVolume)}개` : `기업 ${Object.keys(state.companies).length}곳 · 가게 ${Object.keys(state.stores).length}곳`}</strong></div></div>
+        <div className="city-economic-pulse"><span className="city-pulse-icon" aria-hidden="true">▥</span><div><small>{latest ? `${latest.round}라운드 거래 기록` : "우리 마을 참여 현황"}</small><strong>{latest ? `도매 ${Math.round(latest.totalWholesaleVolume)}개 · 소매 ${Math.round(latest.totalRetailVolume)}개` : `공장 ${Object.keys(state.companies).length}곳 · 가게 ${Object.keys(state.stores).length}곳`}</strong></div></div>
         <button className="city-market-shortcut" onClick={() => open(activeRole === "store" || activeRole === "household" ? activeRole : "market")}>{activeRole === "store" || activeRole === "household" ? "상품 비교·구매 ↗" : "시장 보기 ↗"}</button>
       </footer>
     </section>

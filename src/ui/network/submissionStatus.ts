@@ -7,7 +7,7 @@
 import type { ParticipantId, RoundPhase } from "../../types/domain.js";
 import type { PlayerSlot } from "./sessionClient.js";
 
-/** 각 phase가 어떤 종류의 참가자 id(회사/가게/가계)로 제출을 요구하는지. 사람 입력이
+/** 각 phase가 어떤 종류의 참가자 id(회사/가게/가정)로 제출을 요구하는지. 사람 입력이
  * 필요 없는 phase(정산/시장 갱신 등)는 여기 없다 — 그런 phase에서는 항상 빈 배열을 반환한다. */
 const PARTICIPANT_ID_FIELD_BY_PHASE: Partial<Record<RoundPhase, keyof PlayerSlot>> = {
   "company-turn": "companyId",

@@ -6,7 +6,7 @@ import { ownerName } from './GridCityMap.js';
 import { DISTRICT_LABELS } from './labels.js';
 
 const ART = new URL('./assets/metropolis-modern-v5.png',import.meta.url).href;
-const ROLES = {company:'기업',store:'가게',household:'집'};
+const ROLES = {company:'공장',store:'가게',household:'집'};
 interface Props {state:GameState;player:PlayerState;selectedId?:string|undefined;activeRole?:Role|undefined;onSelect:(id:string)=>void}
 
 export function MetropolisMap({state,player,selectedId,onSelect}:Props) {
@@ -68,6 +68,6 @@ export function MetropolisMap({state,player,selectedId,onSelect}:Props) {
       <g transform="translate(230 175)" pointerEvents="none" aria-label="학교 · 공공시설"><rect x="-55" y="-15" width="110" height="28" rx="10" fill="#f5f1e7" stroke="#758782"/><text textAnchor="middle" y="4" fill="#3c514b" fontSize="13">학교 · 공공시설</text></g>
       {districts&&CITY_DISTRICTS.map(d=><g key={d.id} transform={`translate(${d.center[0]} ${d.center[1]+55})`} className="metropolis-district-label" pointerEvents="none"><rect x="-60" y="-16" width="120" height="30" rx="15" fill="#fff9e9" stroke={d.color} strokeWidth="2"/><text textAnchor="middle" y="4" fill="#34523e" fontSize="14">{DISTRICT_LABELS[d.id]}</text></g>)}
     </svg>
-    <div className="painted-caption">강과 도로가 이어지는 하나의 도시입니다. 드래그로 이동하고 건물을 눌러 입주자를 확인하세요. 같은 건물의 기업·가게·집은 호실로 구분합니다.</div>
+    <div className="painted-caption">강과 도로가 이어지는 하나의 도시입니다. 드래그로 이동하고 건물을 눌러 입주자를 확인하세요. 같은 건물의 공장·가게·집은 호실로 구분합니다.</div>
   </>;
 }

@@ -1,9 +1,9 @@
 /**
- * 기업/가게/가계 턴 화면(CompanyTurnScreen, StoreTurnScreen, HouseholdTurnScreen)이
+ * 공장/가게/가정 턴 화면(CompanyTurnScreen, StoreTurnScreen, HouseholdTurnScreen)이
  * 공유하는 파생 계산 로직. React에 의존하지 않는 순수 함수만 담는다 — 컴포넌트는 이 함수들을
  * 불러 쓰기만 하고, 계산 공식 자체를 다시 베껴 쓰지 않는다.
  *
- * 고정비/가용현금/가계 예산 계산은 src/economy/costs.ts로 옮겨졌다 (advisor 등 UI에 의존하지
+ * 고정비/가용현금/가정 예산 계산은 src/economy/costs.ts로 옮겨졌다 (advisor 등 UI에 의존하지
  * 않는 모듈도 재사용해야 하기 때문) — 여기서는 기존 import 경로가 깨지지 않도록 그대로
  * re-export한다.
  */
@@ -72,12 +72,12 @@ export interface CategoryPurchasePreview {
 }
 
 /**
- * 가게/가계 턴 화면의 "실시간 미리보기"가 서버(runStoreTurn/runHouseholdTurn)와 정확히 같은
+ * 가게/가정 턴 화면의 "실시간 미리보기"가 서버(runStoreTurn/runHouseholdTurn)와 정확히 같은
  * 숫자를 보여주도록, `src/economy/humanDecisions.ts`의 `resolveSingleCategoryPurchase`를
  * 그대로 호출한다(D-033류 화면-서버 계산 불일치 재발 방지 — 화면이 별도로 계산 로직을 베껴
  * 쓰지 않는다). `ownersLookup`/`ownerIdOfBuyer`는 자기 거래 방어적 재검증에 쓰인다 — 가게
- * 화면은 `state.companies`/`store.ownerId`를, 가계 화면은 `state.stores`/`household.ownerId`를
- * 그대로 넘기면 된다. `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 가계 화면만
+ * 화면은 `state.companies`/`store.ownerId`를, 가정 화면은 `state.stores`/`household.ownerId`를
+ * 그대로 넘기면 된다. `trendEvent`(Milestone 6 제안 C, docs/DECISIONS.md D-039)는 가정 화면만
  * 넘긴다 — 가게(도매) 화면은 넘기지 않아 유행 이벤트가 도매 미리보기에 전혀 영향을 주지
  * 않는다.
  */

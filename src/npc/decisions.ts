@@ -76,7 +76,8 @@ export function decideCompanyProduction(
     return null;
   }
   const preset = COMPANY_STRATEGY_PRESETS[company.strategyId];
-  const unitCost = companyUnitCost(categoryId, company.districtId) * costMultiplier;
+  const quality = clamp01(preset.qualityTarget + rngRange(rng, -0.05, 0.05));
+  const unitCost = companyUnitCost(categoryId, company.districtId, quality) * costMultiplier;
 
   // "적정 재고까지만 채운다"(order-up-to) 정책: 이미 안 팔린 재고가 많으면 그만큼 덜
   // 생산한다. 재고를 보지 않고 매번 목표량을 그대로 생산하면 안 팔린 물량이 쌓이는 동안에도
@@ -86,7 +87,6 @@ export function decideCompanyProduction(
   const affordableQuantity = Math.floor(Math.max(0, availableCash) / unitCost);
   const quantity = Math.max(0, Math.min(neededQuantity, affordableQuantity));
 
-  const quality = clamp01(preset.qualityTarget + rngRange(rng, -0.05, 0.05));
   const wholesalePrice = unitCost * preset.priceMarkup * (1 + (quality - 0.5) * 0.4);
   const productionCost = quantity * unitCost;
 
@@ -130,7 +130,7 @@ export function decideCompanyIndustrySwitch(company: CompanyState, state: GameSt
   let bestMargin = -Infinity;
   for (const candidate of PRODUCT_CATEGORIES) {
     if (candidate === currentCategory) continue;
-    const unitCost = companyUnitCost(candidate, company.districtId);
+    const unitCost = companyUnitCost(candidate, company.districtId, COMPANY_STRATEGY_PRESETS[company.strategyId].qualityTarget);
     const margin = estimateCategoryMargin(state.wholesaleListings, candidate, unitCost);
     if (margin === undefined) continue;
     if (margin > bestMargin) {

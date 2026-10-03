@@ -66,6 +66,8 @@ export interface CompanyState {
   quality: number;
   /** 아직 도매시장에서 팔리지 않고 남아있는 재고 수량 (다음 라운드로 이월). */
   inventoryQuantity: number;
+  /** Weighted acquisition cost per remaining unit; absent for legacy stock. */
+  inventoryUnitCost?: number | undefined;
   /** company-turn에서 결정한 도매 판매가. wholesale-market-update가 이 값으로 상장한다. */
   lastWholesalePrice: number;
   /**
@@ -102,6 +104,8 @@ export interface StoreState {
   currentSellingCategoryId: ProductCategoryId | null;
   /** 매입해 판매 중인 재고 수량 (다음 라운드로 이월). */
   inventoryQuantity: number;
+  /** Weighted purchase cost including transport; absent for legacy stock. */
+  inventoryUnitCost?: number | undefined;
   /** 현재 재고의 가중평균 품질 (0~1). */
   inventoryQuality: number;
   /** 현재 소매 판매가 (가게 턴에서 결정). */
@@ -128,6 +132,7 @@ export interface HouseholdState {
   budgetPerRound: number;
   /** 가계 목표는 순자산 극대화 단일 지표가 아니라 복합 지표다 (docs/GAME_RULES.md 1절). */
   satisfactionScore: number;
+  purchases?: { round: number; categoryId: ProductCategoryId; quantity: number; unitCost: number; quality: number }[];
 }
 
 /** 도매시장에 등록된 상품 한 건. 자기 거래 금지(D-005)는 매칭 로직에서 강제한다. */

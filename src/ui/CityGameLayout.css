@@ -1,7 +1,7 @@
 /* Map-first game presentation; existing forms remain the decision engine. */
 .app-shell:has(.city-workspace) { max-width: none; padding: 0; background: #e9eee3; }
 .app-shell:has(.city-workspace) > .app-header { display: none; }
-.city-workspace { --city-ink: #203f39; --city-cream: #fffdf6; color: var(--city-ink); min-height: 100dvh; display: flex; flex-direction: column; background: #d7e4cd; }
+.city-workspace { --city-ink: #203f39; --city-cream: #fffdf6; color: var(--city-ink); height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: #d7e4cd; }
 .city-topbar { position: relative; z-index: 5; display: flex; align-items: center; gap: 24px; min-height: 86px; padding: 14px 28px; background: var(--city-cream); border-bottom: 1px solid #d4dccc; box-shadow: 0 4px 20px #193d2912; }
 .city-brand { display: flex; align-items: center; gap: 12px; min-width: 174px; }
 .city-brand > span { font-size: 40px; color: #427c55; }
@@ -20,8 +20,8 @@
 .city-round strong { font-size: 24px; }
 .city-round strong span { color: #91a18d; font-size: 15px; }
 .city-teacher button.secondary { border: 1px solid #d4dccc; box-shadow: none; font-size: 12px; padding: 8px 12px; border-radius: 10px; }
-.city-playfield { position: relative; flex: 1; min-height: 460px; isolation: isolate; }
-.city-map-viewport { width: 100%; height: calc(100dvh - 176px); min-height: 460px; overflow: auto; overscroll-behavior: contain; cursor: grab; scrollbar-width: thin; scrollbar-color: #637e65 #dbe6d2; background: #92b470; }
+.city-playfield { position: relative; min-height: 0; min-width: 0; isolation: isolate; }
+.city-map-viewport { position: absolute; inset: 0; width: 100%; height: 100%; overflow: auto; overscroll-behavior: contain; cursor: grab; scrollbar-width: thin; scrollbar-color: #637e65 #dbe6d2; background: #92b470; }
 .city-map-viewport:active { cursor: grabbing; }
 .city-map-viewport:focus-visible { outline: 3px solid #ffb703; outline-offset: -3px; }
 .city-map-canvas { position: relative; min-width: 1000px; user-select: none; }
@@ -168,7 +168,6 @@
   .city-wallet strong { font-size: 16px; }
   .city-wallet span { font-size: 10px; }
   .city-teacher button.secondary { min-height: 32px; padding: 5px; max-width: none; }
-  .city-map-viewport { height: 60dvh; min-height: 460px; max-height: 506px; }
   .city-mission { top: 12px; left: 12px; width: 235px; padding: 10px 14px; }
   .city-mission p { margin-bottom: 0; }
   .city-mission button { min-height: 32px; margin-top: 7px; padding: 5px 10px; }
@@ -257,7 +256,6 @@
 .city-workspace:has(.metropolis-world) .city-brand strong { font-size:20px; }
 .city-workspace:has(.metropolis-world) .city-wallet { padding-top:4px; padding-bottom:4px; }
 .city-workspace:has(.metropolis-world) .city-wallet strong { font-size:17px; }
-.city-workspace:has(.metropolis-world) .city-map-viewport { height:calc(100dvh - 140px); }
 .metropolis-directory { padding:6px 12px; gap:6px 12px; border-radius:0 0 12px 0; box-shadow:0 2px 10px #233d3025; }
 .metropolis-directory button { font-size:12px; padding:6px 10px; min-height:30px; }
 .metropolis-directory select { font-size:12px; padding:4px 6px; min-height:30px; }
@@ -317,3 +315,34 @@
 .shopping-receipt,.turn-waiting {padding:12px 16px;border-radius:10px;background:#dfe9df;color:#344c3d;}
 .shopping-error {color:#8c302e;margin:6px 0;}
 @media(max-width:480px){.shopping-shelves{grid-template-columns:1fr}.shopping-wallet{flex-direction:column}}
+
+.store-briefing,.turn-inventory { margin: 16px 0; padding: 16px; border: 1px solid #c9d5ca; border-radius: 14px; background: #f4f5ec; color: #293f38; }
+.store-briefing h3,.turn-inventory h3 { margin: 0 0 10px; font-size: 17px; }
+.store-briefing p,.turn-inventory p { margin: 8px 0; line-height: 1.55; }
+.briefing-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.briefing-grid div { padding:10px; background:#fffef9; border-radius:8px; }
+.briefing-grid dt { font-size:12px; color:#53695e; }
+.briefing-grid dd { margin:5px 0 0; font-weight:700; }
+.store-advisor { margin-top:14px; }
+.store-advisor summary { cursor:pointer; font-weight:700; padding:10px 0; }
+.satisfaction-preview { display:block; padding:10px; margin-top:8px; border-radius:10px; background:#e7eee0; color:#365239; line-height:1.5; }
+.satisfaction-preview p { margin:6px 0; }
+
+/* Two economic actors: production and retail are activities within the enterprise. */
+.city-wallet-group,.city-role-group { border:1px solid #c4d0b8; border-radius:12px; padding:4px 7px; background:#f3f3e8; }
+.city-wallet-group > div,.city-role-group > div { display:flex; gap:5px; }
+.city-wallet-group .economic-group-label,.city-role-group .economic-group-label { display:block; font-size:11px; color:#46624a; margin:0 4px 3px; }
+.city-wallet-group .city-wallet { min-width:0; }
+.enterprise-section { border:1px solid #c4d0b8; border-radius:12px; padding:14px; margin:14px 0; }
+.enterprise-section h3 { margin-top:0; }
+@media(max-width:680px) {
+ .city-wallet-group { padding:3px; flex:1; min-width:0; }
+ .city-wallet-group:first-child { flex:2; }
+ .city-wallet-group .city-wallet { flex:1; }
+ .city-role-group { padding:3px; min-width:0; }
+ .city-role-group:first-child { flex:2; }
+ .city-role-group:last-child { flex:1; }
+ .city-role-group > div { gap:0; }
+ .city-role-nav button { padding:5px 3px; }
+ .city-role-nav small { font-size:9px; }
+}

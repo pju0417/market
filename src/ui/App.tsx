@@ -1,3 +1,4 @@
+import { BeginnerGuide } from "./screens/BeginnerGuide.js";
 import { useEffect, useRef, useState } from "react";
 import type { BusinessSetupChoices } from "../multiplayer/GameSession.js";
 import { GameSession } from "../multiplayer/GameSession.js";
@@ -252,14 +253,15 @@ export function App() {
       {mode.kind === "mode-select" && (
         <div className="title-screen">
           <img className="village-artwork" src={villageArtwork}
-            alt="물건을 만드는 기업, 물건을 파는 가게, 생활에 필요한 물건을 사는 가계가 모인 경제 마을"
+            alt="공장과 가게를 운영하는 기업, 물건을 소비하는 가정이 모인 경제 마을"
             width={1536} height={1024} />
           <p className="title-tagline">만들고, 팔고, 사면서 시장을 배워요!</p>
+          <BeginnerGuide topic="welcome" />
           <div className="mode-cards">
             <button className="mode-card mode-card-solo" onClick={() => setMode({ kind: "local" })}>
               <span className="mode-card-icon" aria-hidden="true">🎮</span>
               <span className="mode-card-title">혼자 하기</span>
-              <span className="mode-card-desc">나 혼자 기업·가게·가계를 모두 운영해요</span>
+              <span className="mode-card-desc">내 기업(공장·가게)과 내 가정의 경제 활동을 해요</span>
             </button>
             <button className="mode-card mode-card-team" onClick={() => setMode({ kind: "network-backend-select" })}>
               <span className="mode-card-icon" aria-hidden="true">👫</span>

@@ -1,3 +1,4 @@
+import { BeginnerGuide } from "./BeginnerGuide.js";
 import { useState } from "react";
 import { DISTRICT_IDS, PRODUCT_CATEGORIES } from "../../economy/config.js";
 import type { BusinessSetupChoices, SubmissionTimeoutSettings } from "../../multiplayer/GameSession.js";
@@ -8,7 +9,7 @@ interface Props {
 }
 
 /**
- * 창업 준비 (사전 단계): 기업/가게의 상권과 업종을 사람이 처음으로 직접 고른다 (D-010).
+ * 창업 준비 (사전 단계): 공장/가게의 상권과 업종을 사람이 처음으로 직접 고른다 (D-010).
  *
  * 구매 매칭 알고리즘 재설계 Stage 2: "고급 설정"(기본 닫힘)에서 제출 제한시간을 켤 수
  * 있다. 로컬 1인 플레이는 지금까지 시간 제한 자체가 없었으므로, 기본값은 꺼짐이다
@@ -32,10 +33,11 @@ export function SetupScreen({ onStart }: Props) {
         <span className="role-icon" aria-hidden="true">🚀</span> 창업 준비
       </h2>
       <p className="muted-text">
-        기업과 가게의 위치, 업종을 정해요. 기업에 좋은 위치와 가게에 좋은 위치는 서로 달라요.
+        공장과 가게는 모두 기업이에요. 내 기업의 공장과 가게가 어떤 물건을 어디에서 만들고 팔지 정해요.
       </p>
 
-      <h3>🏭 기업</h3>
+      <BeginnerGuide topic="setup" />
+      <section className="enterprise-section" aria-label="내 기업"><h3>내 기업</h3><h4>🏭 공장 운영 · 물건 만들기</h4>
       <label className="field">
         <span className="field-label">위치</span>
         <select value={companyDistrictId} onChange={(e) => setCompanyDistrictId(e.target.value as typeof companyDistrictId)}>
@@ -57,7 +59,7 @@ export function SetupScreen({ onStart }: Props) {
         </select>
       </label>
 
-      <h3>🏪 가게</h3>
+      <h4>🏪 가게 운영 · 물건 팔기</h4>
       <label className="field">
         <span className="field-label">위치</span>
         <select value={storeDistrictId} onChange={(e) => setStoreDistrictId(e.target.value as typeof storeDistrictId)}>
@@ -79,6 +81,7 @@ export function SetupScreen({ onStart }: Props) {
         </select>
       </label>
 
+      </section>
       <button className="ghost" onClick={() => setAdvancedOpen((prev) => !prev)}>
         고급 설정 {advancedOpen ? "▾" : "▸"}
       </button>

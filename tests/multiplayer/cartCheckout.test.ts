@@ -4,6 +4,8 @@ import { deliveredListings } from "../../src/economy/city.js";
 import { eligibleRetailListingsForHousehold, eligibleWholesaleListingsForStore } from "../../src/economy/market.js";
 import { deserializeLiveState, serializeLiveState } from "../../src/appsScript/sheetSchema.js";
 import type { CartCheckout, GameState } from "../../src/types/domain.js";
+import { shoppingSatisfaction } from "../../src/ui/shoppingSatisfaction.js";
+import { blendedInventoryCost } from "../../src/economy/inventoryCost.js";
 
 async function storesReady(count = 2) {
   const session = new GameSession(42, undefined, undefined, count);
@@ -25,6 +27,33 @@ function cartFor(session: GameSession, role: "store" | "household", id: string, 
 }
 
 describe("immediate shopping cart and explicit turn completion", () => {
+  it("tracks historical stock cost and previews exactly the satisfaction committed by successive checkouts", async () => {
+    const session = await storesReady(1);
+    const player = session.getPlayers()[0]!;
+    expect(session.getState().companies[player.companyId]!.inventoryUnitCost).toBeGreaterThan(0);
+    const first = cartFor(session, "store", player.storeId, "cost-1", 2);
+    session.checkoutCart("store", player.storeId, first);
+    const second = cartFor(session, "store", player.storeId, "cost-2", 1);
+    session.checkoutCart("store", player.storeId, second);
+    const expectedCost = (2 * first.lines[0]!.unitPrice + second.lines[0]!.unitPrice) / 3;
+    expect(session.getState().stores[player.storeId]!.inventoryUnitCost).toBeCloseTo(expectedCost);
+    session.submitStoreDecision(player.storeId, { retailPrice: 10 });
+    await session.advanceUntilInputRequired();
+    for (let i = 0; i < 2; i++) {
+      const cart = cartFor(session, "household", player.householdId, `satisfaction-${i}`);
+      const state = session.getState();
+      const preview = shoppingSatisfaction(state, player.householdId, cart.lines, state.retailListings);
+      session.checkoutCart("household", player.householdId, cart);
+      expect(session.getState().households[player.householdId]!.satisfactionScore * 100).toBeCloseTo(preview.cumulative);
+    }
+    const state = session.getState();
+    const restored = deserializeLiveState(serializeLiveState(state), state.roundMetrics);
+    expect(restored.stores[player.storeId]!.inventoryUnitCost).toBeCloseTo(expectedCost);
+    expect(restored.households[player.householdId]!.purchases).toEqual(state.households[player.householdId]!.purchases);
+    expect(restored.households[player.householdId]!.purchases).toHaveLength(2);
+    expect(blendedInventoryCost(3, undefined, 2, 40)).toBeUndefined();
+    expect(blendedInventoryCost(0, undefined, 2, 40)).toBe(20);
+  });
   it.each([1, 5, 20])("completes seven cart-based rounds with %i students and per-action hydration", async count => {
     let session = await storesReady(count);
     const restore = () => {

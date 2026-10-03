@@ -4,7 +4,7 @@ import { DISTRICT_IDS } from "../economy/config.js";
 import type { CityPoint, GameState, PlayerState, Role } from "../types/domain.js";
 import { DISTRICT_LABELS } from "./labels.js";
 
-const ROLE_NAMES: Record<Role, string> = { company: "기업", store: "가게", household: "집" };
+const ROLE_NAMES: Record<Role, string> = { company: "공장", store: "가게", household: "집" };
 const BUILDING_ATLAS = new URL("./assets/city-buildings-v2.png", import.meta.url).href;
 const SPRITE_INDEX = { company: 0, store: 1, household: 2 };
 const ZONE_COLORS = ["#c9dda8", "#c4dba3", "#d1ddb1", "#c5d8a1", "#c9d6a6", "#c1d69c"];
@@ -114,6 +114,6 @@ export function GridCityMap({ state, player, selectedId, activeRole, onSelect }:
         return <text key={district} x={x} y={y - 13} textAnchor="middle" className="spatial-district-label">{DISTRICT_LABELS[district]}</text>;
       })}
     </svg>
-    <div className="spatial-map-legend"><span>주황 기업 · 초록 가게 · 보라 집</span><span>도로: 흰색 원활 · 노랑 통행 · 주황 혼잡</span><span>교통은 지난 라운드 운송량 기준</span></div>
+    <div className="spatial-map-legend"><span>주황 공장 · 초록 가게 · 보라 집</span><span>도로: 흰색 원활 · 노랑 통행 · 주황 혼잡</span><span>교통은 지난 라운드 운송량 기준</span></div>
   </>;
 }

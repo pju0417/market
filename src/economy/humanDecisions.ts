@@ -126,10 +126,10 @@ export function resolveCompanyDecision(
   if (categoryId === null) {
     return null;
   }
-  const unitCost = companyUnitCost(categoryId, company.districtId) * costMultiplier;
+  const quality = Math.min(1, Math.max(0, humanInput.quality));
+  const unitCost = companyUnitCost(categoryId, company.districtId, quality) * costMultiplier;
   const affordableQuantity = Math.floor(Math.max(0, availableCash) / unitCost);
   const quantity = Math.max(0, Math.min(Math.floor(humanInput.quantity), affordableQuantity));
-  const quality = Math.min(1, Math.max(0, humanInput.quality));
   const wholesalePrice = Math.max(0, humanInput.wholesalePrice);
 
   return { categoryId, quantity, quality, wholesalePrice, unitCost, productionCost: quantity * unitCost };

@@ -163,8 +163,10 @@ export const CITY_RULES = {
  * 똑같이 이 함수를 쓴다 — UI도 미리보기를 보여줄 때 이 함수를 그대로 불러써야 하며,
  * 공식을 다시 베껴 쓰지 않는다.
  */
-export function companyUnitCost(categoryId: ProductCategoryId, districtId: DistrictId): number {
-  return CATEGORY_UNIT_COST[categoryId] / DISTRICTS[districtId].companySuitability;
+/** 품질 50점은 기준 단가, 0점은 75%, 100점은 125%. */
+export function companyUnitCost(categoryId: ProductCategoryId, districtId: DistrictId, quality = 0.5): number {
+  const qualityMultiplier = 0.75 + 0.5 * Math.min(1, Math.max(0, quality));
+  return CATEGORY_UNIT_COST[categoryId] / DISTRICTS[districtId].companySuitability * qualityMultiplier;
 }
 
 /** 기본 비용 상수 (docs/GAME_RULES.md 3절 — 1라운드부터 적용, D-009). */

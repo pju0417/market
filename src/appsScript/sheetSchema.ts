@@ -57,7 +57,7 @@ export function serializeLiveState(state: GameState): string {
     retailListings,
   };
   const json = JSON.stringify(liveState);
-  if (json.length < 45000) return json;
+  if (json.length < 35000) return json;
   // Repeated field names dominate classroom snapshots. Lossless key packing keeps
   // the live state within a Sheets cell without rounding monetary values.
   const keys: string[] = [];

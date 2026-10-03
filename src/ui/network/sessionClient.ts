@@ -60,7 +60,7 @@ export interface StorePurchaseRequest {
   autoFillPreference?: AutoFillPreference;
 }
 
-/** 가계의 소매 구매 요청. 최대 4개 카테고리를 한 턴에 선언 가능. */
+/** 가정의 소매 구매 요청. 최대 4개 카테고리를 한 턴에 선언 가능. */
 export interface CategoryPurchaseRequest extends StorePurchaseRequest {
   categoryId: ProductCategoryId;
 }

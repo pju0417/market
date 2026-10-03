@@ -5,6 +5,7 @@ import type { GameState, PlayerState } from "../types/domain.js";
 import { RoleArtwork } from "./GameArtwork.js";
 import { DISTRICT_LABELS, formatWon } from "./labels.js";
 import { ownerName } from "./SpatialCityMap.js";
+import { InventoryPanel } from "./screens/InventoryPanel.js";
 
 export function CityBuildingDetails({ state, player, id }: { state: GameState; player: PlayerState; id: string }) {
   const actor = cityActors(state).find((candidate) => candidate.id === id);
@@ -31,6 +32,7 @@ export function CityBuildingDetails({ state, player, id }: { state: GameState; p
       {paid && <p>이번 라운드 지불: 임대료 {formatWon(paid.rent)} · 운송비 {paid.transport.toFixed(2)}원</p>}
     </> : <p>이전 규칙으로 시작한 게임입니다. 새 게임부터 거리·교통 비용이 적용됩니다.</p>}
     {actor.role !== "household" && <p>남은 재고 {actor.inventoryQuantity}개</p>}
+    {actor.ownerId === player.id && <InventoryPanel company={state.companies[id]} store={state.stores[id]} household={state.households[id]} round={state.currentRound} />}
     {actor.ownerId !== player.id && <p className="city-market-note">다른 플레이어의 건물은 조회만 할 수 있어요. 거래는 내 경영 패널에서 결정해요.</p>}
   </section>;
 }

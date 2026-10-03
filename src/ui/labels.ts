@@ -23,13 +23,13 @@ export const CATEGORY_LABELS: Record<ProductCategoryId, string> = {
 };
 
 export const PHASE_LABELS: Record<RoundPhase, string> = {
-  "company-turn": "기업 활동 ① 생산",
-  "company-settlement": "기업 턴 결과 확정",
+  "company-turn": "공장 운영 · 생산",
+  "company-settlement": "공장 턴 결과 확정",
   "wholesale-market-update": "도매시장 갱신",
-  "store-turn": "기업 활동 ② 매입·판매",
+  "store-turn": "가게 운영 · 매입·판매",
   "store-settlement": "가게 턴 결과 확정",
   "retail-market-update": "소비시장 갱신",
-  "household-turn": "가계 활동 · 소비",
+  "household-turn": "가정 생활 · 소비",
   "npc-consumer-behavior": "NPC 소비자 활동",
   "round-settlement": "라운드 정산",
   "round-result": "라운드 결과",

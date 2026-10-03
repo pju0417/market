@@ -1,3 +1,4 @@
+import { BeginnerGuide } from "./BeginnerGuide.js";
 import { useRef, useState } from "react";
 import type { CartCheckout, CartLine, CartReceipt, GameState, ProductCategoryId } from "../../types/domain.js";
 import { cityRent, deliveredListings } from "../../economy/city.js";
@@ -12,6 +13,9 @@ import { RoleArtwork } from "../GameArtwork.js";
 import { MarketEventBanner } from "./MarketEventBanner.js";
 import { IncomeEventBanner } from "./IncomeEventBanner.js";
 import { TrendEventBanner } from "./TrendEventBanner.js";
+import { InventoryPanel } from "./InventoryPanel.js";
+import { StoreBriefing } from "./StoreBriefing.js";
+import { shoppingSatisfaction } from "../shoppingSatisfaction.js";
 
 const formatWon = (value: number) => `${value.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}원`;
 
@@ -61,6 +65,7 @@ export function ShoppingTurnScreen({ session, state, role, participantId, onSubm
   const needsPrice = !!store && (store.inventoryQuantity > 0 || purchasedUnits > 0 || units > 0) && retailPrice <= 0;
   const locked = busy || ended || disabled || uncertain;
   const categoryListings = listings.filter(l => store || l.categoryId === category).sort((a, b) => sort === "price" ? a.price - b.price : b.quality - a.quality);
+  const satisfaction = household ? shoppingSatisfaction(state, participantId, cart, state.retailListings) : undefined;
 
   function changeQuantity(id: string, quantity: number) {
     if (locked) return;
@@ -101,11 +106,15 @@ export function ShoppingTurnScreen({ session, state, role, participantId, onSubm
   return <>
     <MarketEventBanner state={state} role={role} /><IncomeEventBanner state={state} role={role} /><TrendEventBanner state={state} role={role} />
     <div className={`card card-role-${role} shopping-turn`}>
-      <h2 className="card-title"><RoleArtwork role={role} />{store ? "기업 활동 ② 매입·판매" : "가계 활동 · 장보기"}</h2>
-      <p className="hint">{store ? "가게도 상품을 판매하는 기업이에요. 물건을 들여오고 판매 가격을 정해 보세요." : "필요한 물건을 장바구니에 담아 보세요. 한 라운드에 총 6개까지 살 수 있어요."}</p>
+      <h2 className="card-title"><RoleArtwork role={role} />{store ? "가게 운영 · 매입·판매" : "가정 생활 · 장보기"}</h2>
+      <p className="hint">{store ? "공장과 가게는 모두 기업이에요. 다른 공장에서 물건을 들여와 소비자에게 판매해요." : "필요한 물건을 장바구니에 담아 보세요. 한 라운드에 총 6개까지 살 수 있어요."}</p>
+      {store && <StoreBriefing key={`${participantId}-${state.currentRound}`} state={state} store={store} />}
+      <BeginnerGuide key={role} topic={role} />
+      <InventoryPanel store={store} household={household} round={state.currentRound} />
+      {receiptNotSynced && <p role="status">결제는 완료됐어요. 재고·구매 내역과 만족도 정보를 서버에서 갱신 중이에요.</p>}
       <div className="shopping-wallet"><span>쓸 수 있는 돈 <strong>{formatWon(budget)}</strong></span><span>이번 턴 구매 {purchasedUnits}개</span></div>
       {(ended || disabled) && <p className="turn-waiting" role="status">턴을 종료했어요. 모두 마칠 때까지 도시를 둘러볼 수 있어요.</p>}
-      {store && <label className="field"><span className="field-label">우리 가게 판매 가격 · 1개당</span><input type="number" min={0} step={0.1} value={retailPrice} disabled={locked} onChange={e => setRetailPrice(Math.max(0, Number(e.target.value)))} /></label>}
+      {store && <label className="field"><span className="field-label">소비자에게 판매할 가격 · 개당 (소매)</span><input type="number" min={0} step={0.1} value={retailPrice} disabled={locked} onChange={e => setRetailPrice(Math.max(0, Number(e.target.value)))} /></label>}
       {store && !prepared && state.currentRound >= MIN_ROUND_FOR_INDUSTRY_ACTIONS && <details className="turn-secondary-details"><summary>판매 업종·광고 설정</summary>
         <label className="field">판매 업종<select value={sellingCategory} disabled={locked || cart.length > 0 || categoryCooldown} onChange={e => setSellingCategory(e.target.value as ProductCategoryId | "")}><option value="">현재 업종 유지</option>{PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></label>
         <p className="hint">업종 변경은 기존 재고를 폐기하며 변경 대기 기간이 적용돼요. 첫 결제 후에는 이번 턴 설정이 확정돼요.</p>
@@ -124,6 +133,7 @@ export function ShoppingTurnScreen({ session, state, role, participantId, onSubm
           <div><strong>{CATEGORY_LABELS[listing.categoryId]}</strong><small>{ownerName(state, seller?.ownerId ?? "")}</small></div>
           <strong>{formatWon(listing.price)} / 개</strong><small>품질 {Math.round(listing.quality * 100)}점 · 재고 {listing.quantityAvailable}개</small>
           {listing.transportCostPerUnit !== undefined && <small>운송비 {formatWon(listing.transportCostPerUnit)} 포함</small>}
+          {household && <small className="satisfaction-preview">{receiptNotSynced ? "만족도 갱신 중…" : `이 상품 1개를 더 담으면 이번 턴 예상 만족도 ${shoppingSatisfaction(state, participantId, [...cart, { listingId: listing.id, quantity: 1, unitPrice: listing.price }], state.retailListings).round.toFixed(1)}점`}</small>}
           <button className="secondary" disabled={locked || amount >= listing.quantityAvailable || (!store && units + purchasedUnits >= 6)} onClick={() => setCart(current => amount ? current.map(line => line.listingId === listing.id ? { ...line, quantity: line.quantity + 1 } : line) : [...current, { listingId: listing.id, quantity: 1, unitPrice: listing.price }])}>{listing.quantityAvailable <= 0 ? "품절" : amount ? `하나 더 담기 · ${amount}개 담음` : "장바구니에 담기"}</button>
         </article>;
       })}</div>
@@ -137,6 +147,7 @@ export function ShoppingTurnScreen({ session, state, role, participantId, onSubm
           return <div className="shopping-basket-line" key={line.listingId}><div><strong>{listing ? CATEGORY_LABELS[listing.categoryId] : "판매 종료 상품"}</strong><small>{ownerName(state, seller?.ownerId ?? "")} · {formatWon(line.unitPrice)} / 개</small></div><div className="shopping-quantity"><button aria-label="수량 줄이기" disabled={locked} onClick={() => changeQuantity(line.listingId, line.quantity - 1)}>−</button><span>{line.quantity}</span><button aria-label="수량 늘리기" disabled={locked || !listing || line.quantity >= listing.quantityAvailable || (!store && units + purchasedUnits >= 6)} onClick={() => changeQuantity(line.listingId, line.quantity + 1)}>+</button></div><strong>{formatWon(line.quantity * line.unitPrice)}</strong><button className="ghost" disabled={locked} onClick={() => changeQuantity(line.listingId, 0)}>빼기</button></div>;
         })}
         {invalidCart && <p role="alert">재고나 가격이 바뀌었어요. 부족한 상품을 빼거나 다시 담아 주세요.</p>}
+        {satisfaction && !receiptNotSynced && <div className="satisfaction-preview" aria-live="polite"><strong>이번 턴 예상 만족도 {satisfaction.round.toFixed(1)} / 100점</strong><p>결제 후 누적 만족도 예상: {satisfaction.cumulative.toFixed(1)}점</p><small>이번 턴에 이미 산 물건과 장바구니를 함께 계산해요. 평균 품질과 필수 소비 충족 여부에 따라 달라져요. 많이 사는 것만으로 점수가 높아지지는 않아요.</small>{satisfaction.missed.length > 0 && <p>아직 구매하지 않은 필수 품목({satisfaction.missed.map(c => CATEGORY_LABELS[c]).join("·")})의 감점이 반영됐어요.</p>}{invalidCart && <p>재고나 가격이 바뀌어 실제 결제 결과는 달라질 수 있어요.</p>}</div>}
       </section>
       {receipt && <p className="shopping-receipt" role="status">✓ {receipt.units}개 · {formatWon(receipt.total)} 결제 완료. 더 구매하거나 턴을 종료할 수 있어요.</p>}
       <div className="decision-action-bar"><div className="decision-budget"><strong>결제 금액 {formatWon(total)}</strong><span>결제 후 남는 돈 {formatWon(budget - total)}</span></div>

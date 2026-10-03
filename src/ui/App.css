@@ -795,3 +795,13 @@ button.ghost {
     transition: none !important;
   }
 }
+
+.beginner-guide { margin:14px 0; border:1px solid #bdcdbd; border-radius:14px; background:#f2f5ed; text-align:left; color:#294738; width:100%; }
+.beginner-guide-toggle { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; border:0; border-radius:14px; padding:14px; background:transparent; color:inherit; font-size:15px; font-weight:700; text-align:left; cursor:pointer; }
+.beginner-guide-toggle:hover { background:#e7eddf; }
+.beginner-guide-body { padding:0 16px 16px; font-size:14px; line-height:1.65; }
+.beginner-guide-body p { margin:0 0 12px; }
+.beginner-guide-body ol { margin:0 0 12px; padding-left:24px; }
+.beginner-guide-body li { padding:4px 0; }
+.beginner-guide-note { padding:12px; border-radius:9px; background:#e5ecdd; font-size:13px; }
+.title-screen > .beginner-guide { max-width:760px; }

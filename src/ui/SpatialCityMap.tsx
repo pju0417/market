@@ -8,7 +8,7 @@ import { MetropolisMap } from './MetropolisMap.js';
 export { ownerName } from './GridCityMap.js';
 import { ownerName } from './GridCityMap.js';
 const ART = new URL('./assets/city-map-v1.png',import.meta.url).href;
-const ROLES = {company:'기업',store:'가게',household:'집'};
+const ROLES = {company:'공장',store:'가게',household:'집'};
 interface Props {state:GameState;player:PlayerState;selectedId?:string|undefined;activeRole?:Role|undefined;onSelect:(id:string)=>void}
 export function SpatialCityMap(props:Props){
   return props.state.city?.metropolisLayout ? <MetropolisMap {...props}/> : props.state.city?.artworkLayout ? <PaintedCity {...props}/> : <GridCityMap {...props}/>;

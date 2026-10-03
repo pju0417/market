@@ -1,3 +1,4 @@
+import { BeginnerGuide } from "./BeginnerGuide.js";
 import type { GameState, PlayerState } from "../../types/domain.js";
 import { formatWon, profitClass, signedWon } from "../labels.js";
 
@@ -26,7 +27,8 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         <span className="role-icon" aria-hidden="true">🏁</span> {metrics.round}라운드 결과
       </h2>
 
-      <h3>🏭 내 기업</h3>
+      <BeginnerGuide topic="results" />
+      <section className="enterprise-section" aria-label="내 기업 실적"><h3>내 기업</h3><h4>🏭 공장 실적</h4>
       <div className="stat-row">
         <span className="label">이번 라운드 손익</span>
         <span className={`value ${profitClass(myCompanyProfit)}`}>{signedWon(myCompanyProfit)}</span>
@@ -40,7 +42,7 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         <span className={`value ${profitClass(state.companies[player.companyId]!.ledger.cumulativeProfit)}`}>{signedWon(state.companies[player.companyId]!.ledger.cumulativeProfit)}</span>
       </div>
 
-      <h3>🏪 내 가게</h3>
+      <h4>🏪 가게 실적</h4>
       <div className="stat-row">
         <span className="label">이번 라운드 손익</span>
         <span className={`value ${profitClass(myStoreProfit)}`}>{signedWon(myStoreProfit)}</span>
@@ -54,7 +56,7 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         <span className={`value ${profitClass(state.stores[player.storeId]!.ledger.cumulativeProfit)}`}>{signedWon(state.stores[player.storeId]!.ledger.cumulativeProfit)}</span>
       </div>
 
-      <h3>🏠 내 가계</h3>
+      </section><h3>🏠 내 가정 · 가계</h3>
       <div className="stat-row">
         <span className="label">만족도</span>
         <span className="value">{household ? (household.satisfactionScore * 100).toFixed(0) : "-"}점</span>
@@ -66,7 +68,7 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
 
       <h3>📊 전체 시장</h3>
       {metrics.locationCosts && <details className="round-location-costs"><summary>이번 라운드 위치·운송 비용</summary>
-        {[player.companyId, player.storeId, player.householdId].map((id, index) => <p key={id}>{["기업", "가게", "가계"][index]}: 임대료 {(metrics.locationCosts?.[id]?.rent ?? 0).toFixed(2)}원 · 운송비 {(metrics.locationCosts?.[id]?.transport ?? 0).toFixed(2)}원</p>)}
+        {[player.companyId, player.storeId, player.householdId].map((id, index) => <p key={id}>{["공장", "가게", "가정"][index]}: 임대료 {(metrics.locationCosts?.[id]?.rent ?? 0).toFixed(2)}원 · 운송비 {(metrics.locationCosts?.[id]?.transport ?? 0).toFixed(2)}원</p>)}
       </details>}
       <div className="stat-row">
         <span className="label">도매 거래량 / 거래액</span>
@@ -81,7 +83,7 @@ export function RoundResultScreen({ state, player, onNext, isLastRound, disabled
         </span>
       </div>
       <div className="stat-row">
-        <span className="label">평균 가계 만족도</span>
+        <span className="label">평균 가정 만족도</span>
         <span className="value">{(metrics.averageHouseholdSatisfaction * 100).toFixed(0)}점</span>
       </div>
 

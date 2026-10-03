@@ -82,6 +82,20 @@ function categoryRequest(overrides: Partial<CategoryPurchaseRequest> & { categor
 }
 
 describe("resolveCompanyDecision", () => {
+  it("charges more for quality and reduces affordable output, including market events", () => {
+    const company = makeCompany();
+    const make = (quality: number, cash = 1000, multiplier = 1) => resolveCompanyDecision(
+      company, cash, { quantity: 20, quality, wholesalePrice: 50 }, createRng(1), multiplier,
+    )!;
+    const low = make(0), standard = make(0.5), high = make(1);
+    expect(low.unitCost).toBeCloseTo(standard.unitCost * 0.75);
+    expect(high.unitCost).toBeCloseTo(standard.unitCost * 1.25);
+    expect(high.productionCost).toBeGreaterThan(low.productionCost);
+    expect(make(1, 1000, 1.3).productionCost).toBeCloseTo(high.productionCost * 1.3);
+    const budget = standard.unitCost * 10;
+    expect(make(1, budget).quantity).toBeLessThan(make(0, budget).quantity);
+    expect(make(1, budget).productionCost).toBeLessThanOrEqual(budget);
+  });
   it("falls back to the bot policy when humanInput is undefined (identical to calling decideCompanyProduction directly)", () => {
     const company = makeCompany();
     const botDecision = decideCompanyProduction(company, 500, createRng(7));

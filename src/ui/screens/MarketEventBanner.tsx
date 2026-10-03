@@ -23,9 +23,9 @@ export function MarketEventBanner({ state, role }: Props) {
   const round = state.currentRound;
   const message =
     role === "company"
-      ? `시장 소식: 이번 ${round}라운드에는 ${categoryLabel} 원자재 가격이 올라, ${categoryLabel}를 생산하는 기업의 생산단가가 평소보다 약 ${COST_INCREASE_PERCENT}% 더 듭니다. 이 라운드에만 적용됩니다.`
+      ? `시장 소식: 이번 ${round}라운드에는 ${categoryLabel} 원자재 가격이 올라, ${categoryLabel}를 생산하는 공장의 생산단가가 평소보다 약 ${COST_INCREASE_PERCENT}% 더 듭니다. 이 라운드에만 적용됩니다.`
       : role === "store"
-        ? `시장 소식: 이번 ${round}라운드에는 ${categoryLabel} 원자재 가격이 올라, ${categoryLabel}를 만드는 기업들의 생산단가가 올랐어요. 그래서 이번 라운드 도매시장의 ${categoryLabel} 매입가가 평소보다 높을 수 있어요.`
+        ? `시장 소식: 이번 ${round}라운드에는 ${categoryLabel} 원자재 가격이 올라, ${categoryLabel}를 만드는 공장들의 생산단가가 올랐어요. 그래서 이번 라운드 도매시장의 ${categoryLabel} 매입가가 평소보다 높을 수 있어요.`
         : `시장 소식: 이번 ${round}라운드에는 ${categoryLabel} 원자재 가격이 올라, ${categoryLabel} 관련 물건값이 평소보다 비쌀 수 있어요.`;
 
   return (
