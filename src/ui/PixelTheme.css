@@ -1,0 +1,27 @@
+/* A shared pixel-art skin; Korean body text stays readable at classroom sizes. */
+:root { --radius-sm: 3px; --radius-md: 4px; --radius-lg: 5px; --shadow-card: 4px 4px 0 #344b4433; }
+body { background: #d4ddc1; }
+.app-shell button { border-radius: 3px; }
+.app-shell button:focus-visible { outline: 3px solid #bc7934; outline-offset: 3px; }
+.app-shell :is(.card,.mode-card,.beginner-guide,.enterprise-section,.store-briefing,.turn-inventory,.shopping-product,.shopping-basket) {
+  border-radius: 4px; border: 2px solid #718376; box-shadow: 3px 3px 0 #344b4424;
+}
+.app-shell .village-artwork { image-rendering: pixelated; border-radius: 4px; border: 3px solid #405b4c; }
+.pixel-role-artwork { display: inline-block; flex-shrink: 0; background-size: 700% auto; background-repeat: no-repeat; image-rendering: pixelated; background-color: #b6c5a4; }
+.city-workspace .city-topbar,.city-workspace .city-dock { background: #e8e5cf; border-color: #63745e; }
+.city-workspace :is(.city-wallet-group,.city-role-group,.city-wallet,.city-mission,.city-inspector,.city-map-tools,.painted-directory) {
+  border-radius: 3px; border: 2px solid #6b7b65; box-shadow: 3px 3px 0 #263e3440;
+}
+.city-workspace .city-inspector { background: #f1efdf; }
+.city-workspace .city-inspector-heading { background: #dce3ce; border-bottom: 2px solid #7d8d73; }
+.city-workspace .city-step { border-radius: 2px; border: 1px solid #889478; }
+.city-workspace .role-artwork { border-radius: 2px; mix-blend-mode: normal; }
+.city-workspace button.primary { border-radius: 3px; border: 2px solid #244737; background: #3c674e; box-shadow: 3px 3px 0 #244737; }
+.city-workspace button.secondary { border-radius: 3px; }
+.city-workspace .metropolis-world { image-rendering: pixelated; }
+.city-workspace .metropolis-art-clear { filter: saturate(.72) brightness(.9); }
+.city-workspace :is(.painted-label,.metropolis-district-label,.metropolis-role-pin) rect { rx: 2px; ry: 2px; }
+.city-workspace .painted-hit { rx: 2px; ry: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .app-shell button:active:not(:disabled) { transform: translateY(1px); }
+}

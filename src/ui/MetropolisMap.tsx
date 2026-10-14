@@ -5,7 +5,7 @@ import { cityActors, findCityRoute, roadCongestion } from '../economy/city.js';
 import { ownerName } from './GridCityMap.js';
 import { DISTRICT_LABELS } from './labels.js';
 
-const ART = new URL('./assets/metropolis-modern-v5.png',import.meta.url).href;
+const ART = new URL('./assets/metropolis-pixel-v1.png',import.meta.url).href;
 const ROLES = {company:'공장',store:'가게',household:'집'};
 interface Props {state:GameState;player:PlayerState;selectedId?:string|undefined;activeRole?:Role|undefined;onSelect:(id:string)=>void}
 
