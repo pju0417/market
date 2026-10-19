@@ -4,6 +4,7 @@ import { CITY_BUILDINGS, CITY_DISTRICTS, CITY_GRAPH_NODES as CITY_NODES, CITY_GR
 import { cityActors, findCityRoute, roadCongestion } from '../economy/city.js';
 import { ownerName } from './GridCityMap.js';
 import { DISTRICT_LABELS } from './labels.js';
+import { METROPOLIS_OUTLINES } from './metropolisOutlines.js';
 
 const ART = new URL('./assets/metropolis-pixel-v1.png',import.meta.url).href;
 const ROLES = {company:'공장',store:'가게',household:'집'};
@@ -60,7 +61,7 @@ export function MetropolisMap({state,player,selectedId,onSelect}:Props) {
         const pinClear=ownBuildings.every(b=>Math.abs(x+26-b.center[0])>105||Math.abs(y-35-(b.center[1]+44))>32);
         return <g key={index} data-city-building={index} className={`painted-building ${own.length?'owned':''} ${active?'selected':''}`} role={target?'button':undefined} tabIndex={target?0:undefined} aria-label={`${building.name}, ${occupants.map(a=>`${ownerName(state,a.ownerId)}의 ${ROLES[a.role]} ${city.addresses![a.id]!.unit}호`).join(', ')||'빈 건물'}`} aria-pressed={target?active:undefined} onClick={()=>target&&choose(target.id)} onKeyDown={e=>{if(target&&(e.key==='Enter'||e.key===' ')){e.preventDefault();choose(target.id);}}}>
           <title>{building.name} · {occupants.length?`${occupants.length}개 공간 입주`:'입주 가능한 건물'}</title>
-          <rect className="painted-hit" x={x-40} y={y-37} width="80" height="72" rx="16"/>
+          <polygon className="metropolis-building-silhouette" points={METROPOLIS_OUTLINES[building.name]} />
           {target&&clarity&&!own.length&&pinClear&&<g transform={`translate(${x+26} ${y-35})`} className="metropolis-role-pin" pointerEvents="none"><rect x="-22" y="-12" width="44" height="24" rx="7" fill={color} stroke="#fffdf0" strokeWidth="2"/><text textAnchor="middle" y="5" fill="white" fontSize="13" fontWeight="700">{ROLES[target.role]}</text></g>}
           {target&&<g className={`painted-label ${own.length||active?'always':''}`} transform={`translate(${x} ${y+44})`} pointerEvents="none"><rect x="-77" y="-15" width="154" height="30" rx="9" style={{fill:own.length?'#204e43':'#fffdf3',stroke:'#fffdf3',strokeWidth:2}}/><text textAnchor="middle" y="5" style={{fontSize:14,fill:own.length?'#ffffff':'#294435'}}>{label}</text></g>}
         </g>;

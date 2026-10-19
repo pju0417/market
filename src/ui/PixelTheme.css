@@ -22,6 +22,13 @@ body { background: #d4ddc1; }
 .city-workspace .metropolis-art-clear { filter: saturate(.72) brightness(.9); }
 .city-workspace :is(.painted-label,.metropolis-district-label,.metropolis-role-pin) rect { rx: 2px; ry: 2px; }
 .city-workspace .painted-hit { rx: 2px; ry: 2px; }
+.metropolis-building-silhouette { fill: transparent; stroke: transparent; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.metropolis-world .painted-building[role="button"]:hover .metropolis-building-silhouette,
+.metropolis-world .painted-building[role="button"]:focus-visible .metropolis-building-silhouette,
+.metropolis-world .painted-building.selected .metropolis-building-silhouette {
+  fill: transparent; stroke: #183c30; stroke-width: 4px;
+  filter: drop-shadow(0 0 1px #fff2c5);
+}
 @media (prefers-reduced-motion: no-preference) {
   .app-shell button:active:not(:disabled) { transform: translateY(1px); }
 }
